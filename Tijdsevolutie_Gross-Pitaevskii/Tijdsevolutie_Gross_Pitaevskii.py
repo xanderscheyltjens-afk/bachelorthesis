@@ -1,9 +1,9 @@
 #Tijdsevolutie van de Gross-Pitaevskii vergelijking in 1D
 #Auteur: Xander Scheyltjens
-#Laatste update: 2/12/2025
+#Laatste update: 25/03/2026
 
 import numpy as np
-from scipy.fft import fft, ifft, fftfreq
+from scipy.fft import fft, ifft, fftfreq, fftshift, ifftshift
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 
@@ -97,6 +97,105 @@ class Gross_Pitaevskii_1D():
         t_n = int(t / self.dt)
         return np.tile(V_static[:, None], (1, t_n + 1))
 
+    def Ramsey_sequence_generator(self, v, q, dk, V):
+        """Takes in the parameters chosen for the interferometer and returns the correct pulse lengths for a Ramsey sequence"""
+        pulse_width_t = [np.pi/2*(1/np.sqrt((q[0]+dk)**2/2-v[0]*dk-q[0]**2/2+V**2)), 
+                         np.pi*(1/np.sqrt((q[1]+dk)**2/2-v[1]*dk-q[1]**2/2+V**2)), 
+                         np.pi/2*(1/np.sqrt((q[2]+dk)**2/2-v[2]*dk-q[2]**2/2+V**2))]
+
+        return pulse_width_t
+
+    def integrate(self, state):
+        """Integrates a given state in real space"""
+        dx = self.L/self.n
+        Int = np.sum(state)*dx
+        return Int
+
+    def integrate_reciprocal(self, state):
+        """Integrates a given state in reciprocal space"""
+        dk = 2*np.pi/self.L
+        Int = np.sum(state)*dk
+        return Int
+
+    def split_percent(self, k_evo_array, moment, dk):
+        """Determines the fraction of the condensate transferred to the chosen higher momentum state as a way of determining the quality of the pulse"""
+        #We shift the array, mainly to have a more intuitive way of indexing
+        k_evo_array = fftshift(k_evo_array, axes=0)
+        #We select the correct time at which we want to integrate and get the full norm for normalisation
+        index = int(moment/self.dt)
+        state = k_evo_array[:,index]
+        density_k = np.abs(state)**2
+        total = self.integrate_reciprocal(density_k)
+        #We find the peak value around the momentum kick, this assures we only grab the peak of the kicked condensate
+        step_k = 2*np.pi/self.L
+        peak_interval_start = int(self.n//2+dk//(2*step_k))
+        peak_interval_end = int(self.n//2+3*dk//(2*step_k))
+        idx_center = peak_interval_start + np.argmax(density_k[peak_interval_start:peak_interval_end])
+        #We set a threshold. If the amplitude is lower we consider the peak "done"
+        threshold = 0.01 * density_k[idx_center]
+        #Set bounds for walking so we don't get as many weird results. We don't want to get an index out of range so set min to 0 and max to -1
+        half_width = int(dk / (2 * step_k))
+        if idx_center - half_width >= 0:
+            left_bound = idx_center - half_width
+        else:
+            left_bound = 0
+        if idx_center + half_width <= self.n-1:
+            right_bound = idx_center + half_width
+        else:
+            right_bound = -1
+        #Walk left until the amplitude is too low
+        left = idx_center
+        while left > left_bound and density_k[left] > threshold:
+            left -= 1
+        #Walk right until amplitude is too low
+        right = idx_center
+        while right < right_bound and density_k[right] > threshold:
+            right += 1
+        #Integrate over the array where the peak is located
+        split_int = self.integrate_reciprocal(density_k[left:right+1])
+        #Calculate what percentage of the condensate was in the peak
+        percent = split_int/total*100
+        return percent
+
+    def still_percent(self, k_evo_array, moment, dk):
+        """Determines the fraction of the condensate that has a momentum around zero"""
+        #We shift the array, mainly to have a more intuitive way of indexing
+        k_evo_array = fftshift(k_evo_array, axes=0)
+        #We select the correct time at which we want to integrate and get the full norm for normalisation
+        index = int(moment/self.dt)
+        state = k_evo_array[:,index]
+        density_k = np.abs(state)**2
+        total = self.integrate_reciprocal(density_k)
+        #We choose to look around index
+        step_k = 2*np.pi/self.L
+        peak_interval_start = int(self.n//2-dk//(2*step_k))
+        peak_interval_end = int(self.n//2+dk//(2*step_k))
+        idx_center = peak_interval_start + np.argmax(density_k[peak_interval_start:peak_interval_end])
+        #We set a threshold. If the amplitude is lower we consider the peak "done"
+        threshold = 0.01 * density_k[idx_center]
+        #Set bounds for walking so we don't get as many weird results. We don't want to get an index out of range so set min to 0 and max to -1
+        half_width = int(dk / (2 * step_k))
+        if idx_center - half_width >= 0:
+            left_bound = idx_center - half_width
+        else:
+            left_bound = 0
+        if idx_center + half_width <= self.n-1:
+            right_bound = idx_center + half_width
+        else:
+            right_bound = -1
+        #Walk left until the amplitude is too low
+        left = idx_center
+        while left > left_bound and density_k[left] > threshold:
+            left -= 1
+        #Walk right until amplitude is too low
+        right = idx_center
+        while right < right_bound and density_k[right] > threshold:
+            right += 1
+        #Integrate over the array where the peak is located
+        still_int = self.integrate_reciprocal(density_k[left:right+1])
+        #Calculate what percentage of the condensate was in the peak
+        percent = still_int/total*100
+        return percent
     #------Static external potentials-------------------------------------------------
     def null_potential(self,t):
         """Creates a potential matrix that contains no external potential"""
@@ -200,62 +299,81 @@ class Gross_Pitaevskii_1D():
             V += A * np.outer(Gx, envelope)
         return V
 
-    def wave_pulse(self, x_grid, t, t_c = 1, pulse_width_t = 0.5, wavelen = 1, A = 10, v = 1, Gauss = None):
+    def wave_pulse(self, x_grid, t, t_c = 1, pulse_width_t = 0.5, wavelen = 1, A = 10, v = 1):
         """Generates a dynamic potential with a wave pulse at chosen time"""
         #Create time array
         t_n = int(t / self.dt)
         t_arr = np.linspace(0, t, t_n+1)
         #Make the spatial shape of the wave
         wave = np.cos(2*np.pi/wavelen * (x_grid[:,None]-v*t_arr[None,:]))
-        #Make temporal envelope for the pulse (Gaussian)
-        if Gauss != None:
-            envelope = np.exp(-(t_arr - t_c)**2 / (2*pulse_width_t**2))
-        else:
-            envelope = np.where(
-            (t_arr >= t_c - pulse_width_t/2) &
-            (t_arr <  t_c + pulse_width_t/2),
-            1.0,
-            0.0
-            )
+        envelope = np.where(
+        (t_arr >= t_c - pulse_width_t/2) &
+        (t_arr <  t_c + pulse_width_t/2),
+        1.0,
+        0.0
+        )
         #Create time dependant potential
         V = A * wave*envelope[None,:]
         return V
 
-    def wave_pulse_series(self, x_grid, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1], Gauss = None, dk = 1):
+    def wave_pulse_series(self, x_grid, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1]):
         """Generates a dynamic potential with a wave pulse at chosen time"""
         t_n = int(t / self.dt)
         t_arr = np.linspace(0, t, t_n+1)
         V = np.zeros((self.n,t_n+1))
         for t_s, t_w, wavelen, v in zip(t_c,pulse_width_t,wavelen, v):
-           V+=self.wave_pulse(x_grid, t, t_s, t_w, wavelen, A, v, Gauss)
+           V+=self.wave_pulse(x_grid, t, t_s, t_w, wavelen, A, v)
         return V
 
-    def interferometer(self, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1], Gauss=None):
+    def interferometer(self, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1], dk = 1, sign = -1, plot = True):
         """Complete interferometer simulation without any external phase shift"""
         x_grid, k_grid = self.initialize_grids()
         psi_guess = self.guess_wave_function(x_grid)
+        #V = self.gravity_potential(x_grid, t)
         V = self.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
-        evo_array_ground = self.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-4), nmax = 10**6)
-        ground_state = evo_array_ground[:,evo_array_ground.shape[1]-1]
+        [evo_array_ground, k_evo_array_ground] = self.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, sign = sign)
+        ground_state = evo_array_ground[:,-1]
         V = self.potential_well(t, width = 49.9, height = 1000)
-        V += self.wave_pulse_series(x_grid,t, t_c, pulse_width_t , wavelen, A, v, Gauss)
-        evo_array = self.time_evolution(k_grid, ground_state, V, t)
-        self.timeslider_plot(x_grid, evo_array, V)
+        V += self.wave_pulse_series(x_grid,t, t_c, pulse_width_t , wavelen, A, v)
+        [evo_array, k_evo_array] = self.time_evolution(k_grid, ground_state, V, t, sign)
+        if plot:
+            self.timeslider_plot(x_grid, evo_array, V)
+            self.reciprocal_timeslider_plot(k_grid,k_evo_array, dk)
+        return [evo_array, k_evo_array]
+
+    def interferometer_in_gravity(self, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1], dk = 1, sign = -1, plot = True, rico = 0.1):
+        """Complete interferometer simulation without any external phase shift"""
+        x_grid, k_grid = self.initialize_grids()
+        psi_guess = self.guess_wave_function(x_grid)
+        #V = self.gravity_potential(x_grid, t)
+        V = self.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
+        [evo_array_ground, k_evo_array_ground] = self.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, sign = sign)
+        ground_state = evo_array_ground[:,-1]
+        V = self.potential_well(t, width = 49.9, height = 1000)
+        V += self.gravity_potential(x_grid, t, rico)
+        V += self.wave_pulse_series(x_grid,t, t_c, pulse_width_t , wavelen, A, v)
+        [evo_array, k_evo_array] = self.time_evolution(k_grid, ground_state, V, t, sign)
+        if plot:
+            self.timeslider_plot(x_grid, evo_array, V)
+            self.reciprocal_timeslider_plot(k_grid,k_evo_array, dk)
+        return [evo_array, k_evo_array]
 
     #-------Split step methods---------------------------------------------------------------
-    def find_ground_state(self, k_grid, psi_guess, V, TOL=10**(-5), nmax = 10**4, sign = -1):
+    def find_ground_state(self, k_grid, psi_guess, V, TOL=10**(-4), nmax = 10**4, sign = -1):
         """Uses the split step method with an imaginary time evolution to relax the wavefunction toward the ground state"""
         g = self.L/self.Natoms
         dx = self.L/self.n
-        n = 0
+        counter = 0
         #Initialise the kinetic evolution operator which is constant through the loop
         kin_evo = np.exp(-1/4*(k_grid**2)*self.dt)
         psi = psi_guess
         evo_array = np.zeros((self.n, nmax + 2), dtype=complex)
+        k_evo_array = np.zeros((self.n, nmax + 2), dtype=complex)
         evo_array[:,0] = psi_guess
+        k_evo_array[:,0] = fft(psi_guess)
         error = 1
         #Loop over time evolution for set amount of steps
-        while error > TOL and n <= nmax:
+        while error > TOL and counter <= nmax:
             psi_old = psi
             FFT_psi = fft(psi)
             FFT_psi *= kin_evo
@@ -269,12 +387,14 @@ class Gross_Pitaevskii_1D():
             norm_psi = np.trapz(np.abs(psi)**2, dx=dx)
             psi *= np.sqrt(self.Natoms/norm_psi)
             error = np.max(abs(psi_old-psi))
-            n+=1
-            evo_array[:,n] = psi
-        evo_array = evo_array[:,0:n]
-        if n>= nmax:
+            counter+=1
+            evo_array[:,counter] = psi
+            k_evo_array[:,counter] = FFT_psi
+        evo_array = evo_array[:,0:counter]
+        k_evo_array = k_evo_array[:,0:counter]
+        if counter>= nmax:
             print("Given tolerance not reached, simulation stopped after ", nmax, " loops")
-        return evo_array
+        return [evo_array, k_evo_array]
 
     def time_evolution(self, k_grid, psi_guess, V, t, sign = -1):
         """Uses the split step method to evolve the Gross-Pitaevskii equation over time"""
@@ -287,14 +407,16 @@ class Gross_Pitaevskii_1D():
         psi = psi_guess.astype(np.complex128)
         n_steps = int(t / self.dt)
         evo_array = np.zeros((self.n, n_steps + 2), dtype=complex)
+        k_evo_array = np.zeros((self.n, n_steps + 2), dtype=complex)
         evo_array[:,0] = psi_guess
+        k_evo_array[:,0] = fft(psi_guess)
         #Loop over time evolution for set amount of steps
         while time<t:
             FFT_psi = fft(psi)
             FFT_psi *= kin_evo
             psi = ifft(FFT_psi)
             prob_dist = np.abs(psi)**2
-            pot_evo = np.exp(-i*(V[:,counter]-sign*g*prob_dist-1)*self.dt)
+            pot_evo = np.exp(-i*(V[:,counter]-sign*g*prob_dist)*self.dt) #chemical potential -mu = -1 removed for Bragg testing and it seems to work. Ask if this is okay.
             psi *= pot_evo
             FFT_psi = fft(psi)
             FFT_psi *= kin_evo
@@ -302,7 +424,8 @@ class Gross_Pitaevskii_1D():
             time+=self.dt
             counter += 1
             evo_array[:,counter] = psi
-        return evo_array
+            k_evo_array[:,counter] = FFT_psi
+        return [evo_array, k_evo_array]
 
     #------- Visualization ----------------------------------------------------------------
     def timeslider_plot(self, x_grid, evo_array, V):
@@ -329,13 +452,77 @@ class Gross_Pitaevskii_1D():
 
         # ---- Plot setup --------------------------------------------------------------
         fig, ax = plt.subplots()
+        
         fig.subplots_adjust(bottom=0.25)
         # Initial density line
-        line, = ax.plot(x_grid, densities[:, 0], lw=2)
-        line2, = ax.plot(x_grid, V[:,0]*10, lw=2)
+        line, = ax.plot(x_grid, densities[:, 0], lw=1)
+        line2, = ax.plot(x_grid, V[:,0]*10, lw=1)
         # Initial phase image
         im = ax.imshow(
             Z, extent=[x_grid.min(), x_grid.max(), y_min, y_max+0.1*y_max],
+            origin='lower', cmap='twilight', aspect='auto', vmin=-np.pi, vmax=np.pi
+        )
+        # Add initial polygon clip
+        poly = all_polys[0]
+        ax.add_patch(poly)
+        im.set_clip_path(poly)
+        #Add colorbar
+        fig.colorbar(im, ax=ax, label='Phase')
+        #Create slider
+        axtime = fig.add_axes([0.25, 0.1, 0.65, 0.03])
+        time_slider = plt.Slider(ax=axtime, label='Time',
+                                  valmin=0, valmax=(n_times-1)*self.dt, valinit=0)
+        
+        # ---- Update function ----------------------------------------------------
+        def update(val):
+            t = int(time_slider.val/self.dt)
+            # Update density line
+            line.set_ydata(densities[:, t])
+            line2.set_ydata(V[:,t-1]*10)
+            # Update polygon clip
+            poly.set_xy(all_polys[t].get_xy())
+            # Update phase image
+            Z[:] = phases[:, t]
+            im.set_data(Z)
+            fig.canvas.draw_idle()
+
+        time_slider.on_changed(update)
+
+        plt.show()
+
+    def reciprocal_timeslider_plot(self, k_grid, k_evo_array, dk):
+        n_pts, n_times = k_evo_array.shape
+
+        # ---- Precomputation -------------------------------------------------
+        # Shift the frequencies to look normal
+        k_evo_array = fftshift(k_evo_array, axes=0)
+        k_grid = fftshift(k_grid)
+        # Global max density (vertical scale stays constant)
+        global_ymax = np.max(np.abs(k_evo_array)**2)
+        y_min, y_max = 0, global_ymax
+        # Precompute density and wrapped phases for all timesteps
+        densities = np.abs(k_evo_array)**2
+        phases = np.angle(k_evo_array)
+        phases = (phases + np.pi) % (2 * np.pi) - np.pi
+        # Precompute polygons for all timesteps
+        all_polys = []
+        for t in range(n_times):
+            verts = [(k_grid[0], y_min)] + list(zip(k_grid, densities[:, t])) + [(k_grid[-1], y_min)]
+            poly = Polygon(verts, facecolor='none', edgecolor='none')
+            all_polys.append(poly)
+        # Precompute vertical grid for phase image
+        Y = np.linspace(y_min, y_max, 400)
+        # Initial phase-gradient image (first timestep)
+        Z = np.tile(phases[:, 0], (len(Y), 1)).astype(np.float32)
+
+        # ---- Plot setup --------------------------------------------------------------
+        fig, ax = plt.subplots()
+        fig.subplots_adjust(bottom=0.25)
+        # Initial density line
+        line, = ax.plot(k_grid, densities[:, 0], lw=1)
+        # Initial phase image
+        im = ax.imshow(
+            Z, extent=[-2*dk, 2*dk, y_min, y_max+0.1*y_max],
             origin='lower', cmap='twilight', aspect='auto', vmin=-np.pi, vmax=np.pi
         )
         # Add initial polygon clip
@@ -354,7 +541,6 @@ class Gross_Pitaevskii_1D():
             t = int(time_slider.val/self.dt)
             # Update density line
             line.set_ydata(densities[:, t])
-            line2.set_ydata(V[:,t-1]*10)
             # Update polygon clip
             poly.set_xy(all_polys[t].get_xy())
             # Update phase image
