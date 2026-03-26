@@ -3,38 +3,44 @@
 #Laatste update: 25/03/2026
 
 import numpy as np
-from scipy.fft import fft, ifft, fftfreq, fftshift, ifftshift
+from scipy.fft import fft, ifft, fftfreq, fftshift
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 
 class Gross_Pitaevskii_1D():
-    def __init__(self, L = 50, n = 2**9, dt = 125/131072, Natoms = 5120):
-        self.L = L
-        self.n = n
+    """1D simulation of the Gross-Pitaevskii equation. Includes simulation, plotting and data acquisition methods"""
+    #-----Initialisation class----------------------------------------------------------
+    def __init__(self, sim_length=50, gridpoints=2**9, dt=125/131072, Natoms=5120):
+        self.sim_length = sim_length
+        self.gridpoints = gridpoints
         self.dt = dt
         self.Natoms = Natoms
 
     # Properties for security
     @property
-    def L(self): return self._L
+    def sim_length(self):
+        return self._sim_length
     @property
-    def n(self): return self._n
+    def gridpoints(self):
+        return self._gridpoints
     @property
-    def dt(self): return self._dt
+    def dt(self):
+        return self._dt
     @property
-    def Natoms(self): return self._Natoms
+    def Natoms(self):
+        return self._Natoms
 
     #Add setters with necessary checks
-    @L.setter
-    def L(self, L):
-        if isinstance(L, (int, float)) and L > 0:
-            self._L = L
+    @sim_length.setter
+    def sim_length(self, sim_length):
+        if isinstance(sim_length, (int, float)) and sim_length > 0:
+            self._sim_length = sim_length
         else:
-            raise ValueError('Length of the simulation should be a positive number') 
-    @n.setter
-    def n(self, n):
-        if isinstance(n, int) and n > 0:
-            self._n = n
+            raise ValueError('Length of the simulation should be a positive number')
+    @gridpoints.setter
+    def gridpoints(self, gridpoints):
+        if isinstance(gridpoints, int) and gridpoints > 0:
+            self._gridpoints = gridpoints
         else:
             raise ValueError('The amount of gridpoints should be a positive integer')
     @dt.setter
@@ -49,20 +55,19 @@ class Gross_Pitaevskii_1D():
             self._Natoms = Natoms
         else:
             raise ValueError('The amount of atoms should be a positive integer')
-   
-    #-----General use methods--------------------------------------------------------------
+    #-----General use methods-------------------------------------------------------------
     def stability_test(self):
         """Tests the stability of the simulation for the given parameters"""
-        dx = self.L / self.n
+        dx = self.sim_length / self.gridpoints
         if dx >= 1:
             print("Step size should be smaller than the healing length (dx < 1)")
-        elif np.log2(self.n)%1!= 0:
+        elif np.log2(self.gridpoints)%1!= 0:
             print("Ideally the number of gridpoints should be a power of 2 to speed up the FFT")
-        elif self.Natoms<=self.n:
+        elif self.Natoms<=self.gridpoints:
             print("For the Gross-Pitaevskii equation to be valid the number of atoms should be much bigger than the number of gridpoints, maybe around 10x")
-        elif self.Natoms/self.L<= 1:
+        elif self.Natoms/self.sim_length<= 1:
             print("The interaction between atoms is too large so the Gross-Pitaevskii equation won't be valid for this system. please increase L or decrease the amount of atoms")
-        elif self.dt>=(self.L/self.n)**2:
+        elif self.dt>=(self.sim_length/self.gridpoints)**2:
             print("The time step should be smaller than the characteristic time scale, which in our units is dx^2")
         else:
             print("Parameters look good to me :)")
@@ -70,54 +75,64 @@ class Gross_Pitaevskii_1D():
     def initialize_grids(self):
         """Initializes the grids in real and reciprocal space"""
         #Calculate spatial step size
-        dx = self.L/self.n
+        dx = self.sim_length/self.gridpoints
         #Initialise the grids in real and reciprocal space
-        x_grid = np.linspace(-self.L/2,self.L/2,self.n)
-        k_grid = 2*np.pi/dx*fftfreq(self.n)
+        x_grid = np.linspace(-self.sim_length/2,self.sim_length/2,self.gridpoints)
+        k_grid = 2*np.pi/dx*fftfreq(self.gridpoints)
         return [x_grid,k_grid]
-                     
-    def guess_wave_function(self,x_grid):
-        """Sets a normalized guess for the wave function"""
+
+    def guess_wave_function(self, x_grid):
+        """Sets a normalized guess for the wave function for a standard potential well"""
         #Calculate spatial step size
-        dx = self.L/self.n
+        dx = self.sim_length/self.gridpoints
         #Initialise our guess for the wave function
-        psi_0 = -np.tanh((1/4)*(x_grid-self.L/2))*np.tanh((1/4)*(x_grid+self.L/2))
+        psi = -np.tanh((1/4)*(x_grid-self.sim_length/2))*np.tanh((1/4)*(x_grid+self.sim_length/2))
         #Normalize our guess to the number of atoms
-        norm_0 = np.trapz(np.abs(psi_0)**2, dx=dx)
-        psi_guess = np.sqrt(self.Natoms/norm_0)*psi_0
+        norm = np.trapz(np.abs(psi)**2, dx=dx)
+        psi_guess = np.sqrt(self.Natoms/norm)*psi
         return psi_guess
 
-    def split_beams(self, psi, x_grid, k):
+    def harmonic_guess_wave_function(self, x_grid, x_c=0, width=5):
+        """Sets a normalized guess for the wave function for a standard potential well"""
+        #Calculate spatial step size
+        dx = self.sim_length/self.gridpoints
+        #Initialise our guess for the wave function
+        psi = np.exp(-(x_grid-x_c)**2/(2*width**2))
+        #Normalize our guess to the number of atoms
+        norm = np.trapz(np.abs(psi)**2, dx=dx)
+        psi_guess = np.sqrt(self.Natoms/norm)*psi
+        return psi_guess
+
+    def split_beams(self, psi, x_grid, k_kick):
         """Uses operator to impart an idealized momentum kick"""
-        psi_new = 1/np.sqrt(2) * (psi * np.exp(1j*k*x_grid)+ psi * np.exp(-1j*k*x_grid))
+        psi_new = 1/np.sqrt(2) * (psi * np.exp(1j*k_kick*x_grid)+ psi * np.exp(-1j*k_kick*x_grid))
         return psi_new
 
-    def static_to_dynamic(self,t, V_static):
+    def static_to_dynamic(self, t, V_static):
         """Convert a static 1D potential into a shape that fits the time dependent framework"""
         t_n = int(t / self.dt)
         return np.tile(V_static[:, None], (1, t_n + 1))
 
-    def Ramsey_sequence_generator(self, v, q, dk, V):
+    def Ramsey_sequence_generator(self, v, q, k_kick, A):
         """Takes in the parameters chosen for the interferometer and returns the correct pulse lengths for a Ramsey sequence"""
-        pulse_width_t = [np.pi/2*(1/np.sqrt((q[0]+dk)**2/2-v[0]*dk-q[0]**2/2+V**2)), 
-                         np.pi*(1/np.sqrt((q[1]+dk)**2/2-v[1]*dk-q[1]**2/2+V**2)), 
-                         np.pi/2*(1/np.sqrt((q[2]+dk)**2/2-v[2]*dk-q[2]**2/2+V**2))]
-
-        return pulse_width_t
+        pulse_duration = [np.pi/2*(1/np.sqrt((q[0]+k_kick)**2/2-v[0]*k_kick-q[0]**2/2+A**2)),
+                         np.pi*(1/np.sqrt((q[1]+k_kick)**2/2-v[1]*k_kick-q[1]**2/2+A**2)),
+                         np.pi/2*(1/np.sqrt((q[2]+k_kick)**2/2-v[2]*k_kick-q[2]**2/2+A**2))]
+        return pulse_duration
 
     def integrate(self, state):
         """Integrates a given state in real space"""
-        dx = self.L/self.n
-        Int = np.sum(state)*dx
-        return Int
+        dx = self.sim_length/self.gridpoints
+        integral = np.sum(state)*dx
+        return integral
 
     def integrate_reciprocal(self, state):
         """Integrates a given state in reciprocal space"""
-        dk = 2*np.pi/self.L
-        Int = np.sum(state)*dk
-        return Int
+        dk = 2*np.pi/self.sim_length
+        integral = np.sum(state)*dk
+        return integral
 
-    def split_percent(self, k_evo_array, moment, dk):
+    def split_percent(self, k_evo_array, moment, k_kick):
         """Determines the fraction of the condensate transferred to the chosen higher momentum state as a way of determining the quality of the pulse"""
         #We shift the array, mainly to have a more intuitive way of indexing
         k_evo_array = fftshift(k_evo_array, axes=0)
@@ -127,19 +142,19 @@ class Gross_Pitaevskii_1D():
         density_k = np.abs(state)**2
         total = self.integrate_reciprocal(density_k)
         #We find the peak value around the momentum kick, this assures we only grab the peak of the kicked condensate
-        step_k = 2*np.pi/self.L
-        peak_interval_start = int(self.n//2+dk//(2*step_k))
-        peak_interval_end = int(self.n//2+3*dk//(2*step_k))
+        dk = 2*np.pi/self.sim_length
+        peak_interval_start = int(self.gridpoints//2+k_kick//(2*dk))
+        peak_interval_end = int(self.gridpoints//2+3*k_kick//(2*dk))
         idx_center = peak_interval_start + np.argmax(density_k[peak_interval_start:peak_interval_end])
         #We set a threshold. If the amplitude is lower we consider the peak "done"
         threshold = 0.01 * density_k[idx_center]
         #Set bounds for walking so we don't get as many weird results. We don't want to get an index out of range so set min to 0 and max to -1
-        half_width = int(dk / (2 * step_k))
+        half_width = int(k_kick / (2 * dk))
         if idx_center - half_width >= 0:
             left_bound = idx_center - half_width
         else:
             left_bound = 0
-        if idx_center + half_width <= self.n-1:
+        if idx_center + half_width <= self.gridpoints-1:
             right_bound = idx_center + half_width
         else:
             right_bound = -1
@@ -157,7 +172,7 @@ class Gross_Pitaevskii_1D():
         percent = split_int/total*100
         return percent
 
-    def still_percent(self, k_evo_array, moment, dk):
+    def still_percent(self, k_evo_array, moment, k_kick):
         """Determines the fraction of the condensate that has a momentum around zero"""
         #We shift the array, mainly to have a more intuitive way of indexing
         k_evo_array = fftshift(k_evo_array, axes=0)
@@ -167,19 +182,19 @@ class Gross_Pitaevskii_1D():
         density_k = np.abs(state)**2
         total = self.integrate_reciprocal(density_k)
         #We choose to look around index
-        step_k = 2*np.pi/self.L
-        peak_interval_start = int(self.n//2-dk//(2*step_k))
-        peak_interval_end = int(self.n//2+dk//(2*step_k))
+        dk = 2*np.pi/self.sim_length
+        peak_interval_start = int(self.gridpoints//2-k_kick//(2*dk))
+        peak_interval_end = int(self.gridpoints//2+k_kick//(2*dk))
         idx_center = peak_interval_start + np.argmax(density_k[peak_interval_start:peak_interval_end])
         #We set a threshold. If the amplitude is lower we consider the peak "done"
         threshold = 0.01 * density_k[idx_center]
         #Set bounds for walking so we don't get as many weird results. We don't want to get an index out of range so set min to 0 and max to -1
-        half_width = int(dk / (2 * step_k))
+        half_width = int(k_kick / (2 * dk))
         if idx_center - half_width >= 0:
             left_bound = idx_center - half_width
         else:
             left_bound = 0
-        if idx_center + half_width <= self.n-1:
+        if idx_center + half_width <= self.gridpoints-1:
             right_bound = idx_center + half_width
         else:
             right_bound = -1
@@ -196,37 +211,38 @@ class Gross_Pitaevskii_1D():
         #Calculate what percentage of the condensate was in the peak
         percent = still_int/total*100
         return percent
-    #------Static external potentials-------------------------------------------------
-    def null_potential(self,t):
+
+    #------Static external potentials------------------------------------------------------
+    def null_potential(self, t):
         """Creates a potential matrix that contains no external potential"""
-        V = np.zeros(self.n)
+        V = np.zeros(self.gridpoints)
         V = self.static_to_dynamic(t,V)
         return V
 
-    def potential_well(self,t,width = 49, height = 5):
+    def potential_well(self, t, width = 49, height = 5):
         """Generates a symmetrical potential well of chosen height and width"""
         #Initialize array
-        V = np.zeros(self.n)
+        V = np.zeros(self.gridpoints)
         #Calculate index bounds
-        leftbound = int(np.floor(self.n * (0.5 - width/(2*self.L))))
-        rightbound = int(np.floor(self.n * (0.5 + width/(2*self.L))))
+        leftbound = int(np.floor(self.gridpoints * (0.5 - width/(2*self.sim_length))))
+        rightbound = int(np.floor(self.gridpoints * (0.5 + width/(2*self.sim_length))))
         #Check if bounds are in-bounds
         leftbound = max(0, leftbound)
-        rightbound = min(self.n, rightbound)
+        rightbound = min(self.gridpoints, rightbound)
         #Add external potential outside of bounds
         V[0:leftbound] = height
-        V[rightbound:self.n] = height
+        V[rightbound:self.gridpoints] = height
         #Make shape of potential matrix fit in our dynamic framework
         V = self.static_to_dynamic(t,V)
         return V
 
-    def harmonic_potential(self,x_grid,t,x_c = 0,omega=1):
+    def harmonic_potential(self, x_grid, t, x_c = 0, omega=1):
         """Generates a harmonic potential well"""
         V = 1/2*omega*(x_grid-x_c)**2
         V = self.static_to_dynamic(t,V)
         return V
 
-    def potential_well_with_Gauss(self, x_grid,t, factor = 0.5, width=49, height=5.0,):
+    def potential_well_with_Gauss(self, x_grid, t, factor = 0.5, width=49, height=5.0,):
         """Generates a potential well with added Gaussian curve"""
         #Set baseline as potential well
         V_well = self.potential_well(t, width = width, height = height)
@@ -235,46 +251,53 @@ class Gross_Pitaevskii_1D():
         V = self.static_to_dynamic(t,V)
         return V
 
-    def gravity_potential(self,x_grid,t, rico=0.1):
+    def gravity_potential(self, x_grid, t, gravity=0.1):
         """Generates a linearly increasing potential to simulate the gravitational potential"""
         #Set linearly increasing potential
-        V = rico*(x_grid+self.L/2)
+        V = gravity*(x_grid+self.sim_length/2)
         #Set a wall of "infinite" potential
         V[0] = 10**10
         V = self.static_to_dynamic(t,V)
         return V
 
-    #--------Dynamic external potentials-----------------------------------------------------
-    def delta_spike_potential(self, t, t_spike = [1], x_spike = [0], A = 100):
+    #--------Dynamic external potentials---------------------------------------------------
+    def delta_spike_potential(self, t, t_spike=None, x_spike=None, A=100):
         """Generates a dynamic potential with delta spikes at chosen position and time"""
+        #Set default values if none are given. 
+        #We set these seperately since lists are mutable and could cause issues if assigned in the top line
+        if t_spike is None:
+            t_spike = [1]
+        if x_spike is None:
+            x_spike = [0]
+
         #Set baseline as the potential well
         V = self.potential_well(t)
-        dx = self.L/self.n
+        dx = self.sim_length/self.gridpoints
         #Add spikes at chosen times and places
         for t_s, x_s in zip(t_spike, x_spike):
-            x_i = int((x_s-self.L/2)/dx)
+            x_i = int((x_s-self.sim_length/2)/dx)
             t_i = int(t_s/self.dt)
-            V[x_i,t_i] = A 
+            V[x_i,t_i] = A
         return V
 
-    def stirring_potential_Gauss(self, t_total, x_grid, width=49, height=5.0,factor=0.5, freq=0.1, amp=1.0):
+    def stirring_potential_Gauss(self, t_total, x_grid, width=49, height=5.0,factor=0.5, freq=0.1, A=1.0):
         """ Returns a 2D potential array V[x, t] = box walls + oscillating Gaussian bump. """
         #Create time array
         t_n = int(t_total / self.dt)
         t_arr = np.linspace(0, t_total, t_n+1)
         # Compute the center shift for every time
-        shift = 0.2 * self.L * np.sin(2 * np.pi * freq * t_arr)
-        # Make X 2D: 
+        shift = 0.2 * self.sim_length * np.sin(2 * np.pi * freq * t_arr)
+        # Make X 2D:
         X = x_grid[:, None]
         # Make shift 2D
         S = shift[None, :]
         # Build Gaussian bump
-        V = amp * np.exp(-factor * (X - S)**2)
+        V = A * np.exp(-factor * (X - S)**2)
         #Add potential well
         V += self.potential_well(t_total, width=width, height=height)
         return V
 
-    def Gauss_pulse(self, x_grid, t, x_c=0, t_c=1.0, pulse_width_x=1,pulse_width_t=0.05,A=100):
+    def Gauss_pulse(self, x_grid, t, x_c=0, t_c=1.0, pulse_width_x=1, pulse_duration=0.05, A=100):
         """Short Gaussian light pulse."""
         #Create time array
         t_n = int(t / self.dt)
@@ -282,24 +305,31 @@ class Gross_Pitaevskii_1D():
         #Spatial Gaussian
         Gx = np.exp(-(x_grid - x_c)**2 / (2 * pulse_width_x**2))
         #Temporal Gaussian centered at t_s
-        envelope = np.exp(-(t_arr - t_c)**2 / (2 * pulse_width_t**2))
+        envelope = np.exp(-(t_arr - t_c)**2 / (2 * pulse_duration**2))
         #Outer product gives time dependant potential matrix V[x,t]
         V = A * np.outer(Gx, envelope)
         return V
 
-    def Gauss_pulse_series(self, x_grid, t, x_c=[0], t_c=[1.0], pulse_width_x=1,pulse_width_t=0.05,A=100):
+    def Gauss_pulse_series(self, x_grid, t, t_c=None, x_c=None, pulse_duration=0.05, pulse_width_x=1, A=100):
         """Series of Gaussian light pulses."""
+        #Set default values if none are given.
+        #We set these seperately since lists are mutable and could cause issues if assigned in the top line
+        if t_c is None:
+            t_c = [1]
+        if x_c is None:
+            x_c = [0]
+
         #Create time array
         t_n = int(t / self.dt)
         t_arr = np.linspace(0, t, t_n + 1)
-        V = np.zeros((self.n,t_n+1))
+        V = np.zeros((self.gridpoints,t_n+1))
         for t_s, x_s in zip(t_c, x_c):
             Gx = np.exp(-(x_grid - x_s)**2 / (2 * pulse_width_x**2))
-            envelope = np.exp(-(t_arr - t_s)**2 / (2 * pulse_width_t**2))
+            envelope = np.exp(-(t_arr - t_s)**2 / (2 * pulse_duration**2))
             V += A * np.outer(Gx, envelope)
         return V
 
-    def wave_pulse(self, x_grid, t, t_c = 1, pulse_width_t = 0.5, wavelen = 1, A = 10, v = 1):
+    def wave_pulse(self, x_grid, t, t_c=1, pulse_duration=0.5, wavelen=1, A=10, v=1):
         """Generates a dynamic potential with a wave pulse at chosen time"""
         #Create time array
         t_n = int(t / self.dt)
@@ -307,8 +337,8 @@ class Gross_Pitaevskii_1D():
         #Make the spatial shape of the wave
         wave = np.cos(2*np.pi/wavelen * (x_grid[:,None]-v*t_arr[None,:]))
         envelope = np.where(
-        (t_arr >= t_c - pulse_width_t/2) &
-        (t_arr <  t_c + pulse_width_t/2),
+        (t_arr >= t_c - pulse_duration/2) &
+        (t_arr <  t_c + pulse_duration/2),
         1.0,
         0.0
         )
@@ -316,59 +346,92 @@ class Gross_Pitaevskii_1D():
         V = A * wave*envelope[None,:]
         return V
 
-    def wave_pulse_series(self, x_grid, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1]):
+    def wave_pulse_series(self, x_grid, t, t_c=None, pulse_duration=None, wavelen=None, A=10, v=None):
         """Generates a dynamic potential with a wave pulse at chosen time"""
+        #Set default values if none are given.
+        #We set these seperately since lists are mutable and could cause issues if assigned in the top line
+        if t_c is None:
+            t_c = [1]
+        if pulse_duration is None:
+            pulse_duration = [0.5]
+        if wavelen is None:
+            wavelen = [1]
+        if v is None:
+            v = [1]
+
+        #Create time array
         t_n = int(t / self.dt)
-        t_arr = np.linspace(0, t, t_n+1)
-        V = np.zeros((self.n,t_n+1))
-        for t_s, t_w, wavelen, v in zip(t_c,pulse_width_t,wavelen, v):
-           V+=self.wave_pulse(x_grid, t, t_s, t_w, wavelen, A, v)
+        V = np.zeros((self.gridpoints,t_n+1))
+        for t_s, t_w, wavelen, v in zip(t_c,pulse_duration,wavelen, v):
+            V+=self.wave_pulse(x_grid, t, t_s, t_w, wavelen, A, v)
+
         return V
 
-    def interferometer(self, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1], dk = 1, sign = -1, plot = True):
+    def interferometer(self, t, t_c=None, pulse_duration=None, wavelen=None, A=10, v=None, k_kick=1, g_factor=-1, plot=True):
         """Complete interferometer simulation without any external phase shift"""
+        #Set default values if none are given. 
+        #We set these seperately since lists are mutable and could cause issues if assigned in the top line
+        if t_c is None:
+            t_c = [1]
+        if pulse_duration is None:
+            pulse_duration = [0.5]
+        if wavelen is None:
+            wavelen = [1]
+        if v is None:
+            v = [1]
+
+        x_grid, k_grid = self.initialize_grids()
+        psi_guess = self.guess_wave_function(x_grid)
+        V = self.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
+        [evo_array_ground,_] = self.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, g_factor = g_factor)
+        ground_state = evo_array_ground[:,-1]
+        V = self.potential_well(t, width = 49.9, height = 1000)
+        V += self.wave_pulse_series(x_grid,t, t_c, pulse_duration , wavelen, A, v)
+        [evo_array, k_evo_array] = self.time_evolution(k_grid, ground_state, V, t, g_factor)
+        if plot:
+            self.timeslider_plot(x_grid, evo_array, V)
+            self.reciprocal_timeslider_plot(k_grid,k_evo_array, k_kick)
+        return [evo_array, k_evo_array]
+
+    def interferometer_in_gravity(self, t, t_c=None, pulse_duration=None, wavelen=None, A=10, v=None, k_kick=50, g_factor=-1, plot=True, gravity=0.1):
+        """Complete interferometer simulation without any external phase shift"""
+        #Set default values if none are given.
+        #We set these seperately since lists are mutable and could cause issues if assigned in the top line
+        if t_c is None:
+            t_c = [1]
+        if pulse_duration is None:
+            pulse_duration = [0.5]
+        if wavelen is None:
+            wavelen = [1]
+        if v is None:
+            v = [1]
+
         x_grid, k_grid = self.initialize_grids()
         psi_guess = self.guess_wave_function(x_grid)
         #V = self.gravity_potential(x_grid, t)
         V = self.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
-        [evo_array_ground, k_evo_array_ground] = self.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, sign = sign)
+        [evo_array_ground,_] = self.find_ground_state(k_grid, psi_guess, V, nmax = 10**6, g_factor = g_factor)
         ground_state = evo_array_ground[:,-1]
         V = self.potential_well(t, width = 49.9, height = 1000)
-        V += self.wave_pulse_series(x_grid,t, t_c, pulse_width_t , wavelen, A, v)
-        [evo_array, k_evo_array] = self.time_evolution(k_grid, ground_state, V, t, sign)
+        V += self.gravity_potential(x_grid, t, gravity)
+        V += self.wave_pulse_series(x_grid,t, t_c, pulse_duration , wavelen, A, v)
+        [evo_array, k_evo_array] = self.time_evolution(k_grid, ground_state, V, t, g_factor)
         if plot:
             self.timeslider_plot(x_grid, evo_array, V)
-            self.reciprocal_timeslider_plot(k_grid,k_evo_array, dk)
+            self.reciprocal_timeslider_plot(k_grid,k_evo_array, k_kick)
         return [evo_array, k_evo_array]
 
-    def interferometer_in_gravity(self, t, t_c = [1], pulse_width_t = [0.5], wavelen = [1], A = 10, v = [1], dk = 1, sign = -1, plot = True, rico = 0.1):
-        """Complete interferometer simulation without any external phase shift"""
-        x_grid, k_grid = self.initialize_grids()
-        psi_guess = self.guess_wave_function(x_grid)
-        #V = self.gravity_potential(x_grid, t)
-        V = self.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
-        [evo_array_ground, k_evo_array_ground] = self.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, sign = sign)
-        ground_state = evo_array_ground[:,-1]
-        V = self.potential_well(t, width = 49.9, height = 1000)
-        V += self.gravity_potential(x_grid, t, rico)
-        V += self.wave_pulse_series(x_grid,t, t_c, pulse_width_t , wavelen, A, v)
-        [evo_array, k_evo_array] = self.time_evolution(k_grid, ground_state, V, t, sign)
-        if plot:
-            self.timeslider_plot(x_grid, evo_array, V)
-            self.reciprocal_timeslider_plot(k_grid,k_evo_array, dk)
-        return [evo_array, k_evo_array]
-
-    #-------Split step methods---------------------------------------------------------------
-    def find_ground_state(self, k_grid, psi_guess, V, TOL=10**(-4), nmax = 10**4, sign = -1):
+    #-------Split step methods--------------------------------------------------------------
+    def find_ground_state(self, k_grid, psi_guess, V, TOL=10**(-5), nmax=10**4, g_factor=-1):
         """Uses the split step method with an imaginary time evolution to relax the wavefunction toward the ground state"""
-        g = self.L/self.Natoms
-        dx = self.L/self.n
+        g = self.sim_length/self.Natoms
+        dx = self.sim_length/self.gridpoints
         counter = 0
         #Initialise the kinetic evolution operator which is constant through the loop
         kin_evo = np.exp(-1/4*(k_grid**2)*self.dt)
         psi = psi_guess
-        evo_array = np.zeros((self.n, nmax + 2), dtype=complex)
-        k_evo_array = np.zeros((self.n, nmax + 2), dtype=complex)
+        evo_array = np.zeros((self.gridpoints, nmax + 2), dtype=complex)
+        k_evo_array = np.zeros((self.gridpoints, nmax + 2), dtype=complex)
         evo_array[:,0] = psi_guess
         k_evo_array[:,0] = fft(psi_guess)
         error = 1
@@ -378,8 +441,8 @@ class Gross_Pitaevskii_1D():
             FFT_psi = fft(psi)
             FFT_psi *= kin_evo
             psi = ifft(FFT_psi)
-            prob_dist = np.absolute(psi_old)**2
-            pot_evo = np.exp(-(V[:,0]-sign*g*prob_dist-1)*self.dt) #Here we use mu=\pm1 in our units
+            density = np.absolute(psi_old)**2
+            pot_evo = np.exp(-(V[:,0]-g_factor*g*density-1)*self.dt) #Here we use mu=\pm1 in our units
             psi *= pot_evo
             FFT_psi = fft(psi)
             FFT_psi *= kin_evo
@@ -396,9 +459,9 @@ class Gross_Pitaevskii_1D():
             print("Given tolerance not reached, simulation stopped after ", nmax, " loops")
         return [evo_array, k_evo_array]
 
-    def time_evolution(self, k_grid, psi_guess, V, t, sign = -1):
+    def time_evolution(self, k_grid, psi_guess, V, t, g_factor=-1):
         """Uses the split step method to evolve the Gross-Pitaevskii equation over time"""
-        g = self.L/self.Natoms
+        g = self.sim_length/self.Natoms
         i = 0+1j
         time = 0
         counter = 0
@@ -406,8 +469,8 @@ class Gross_Pitaevskii_1D():
         kin_evo = np.exp(-i/4*(k_grid**2)*self.dt)
         psi = psi_guess.astype(np.complex128)
         n_steps = int(t / self.dt)
-        evo_array = np.zeros((self.n, n_steps + 2), dtype=complex)
-        k_evo_array = np.zeros((self.n, n_steps + 2), dtype=complex)
+        evo_array = np.zeros((self.gridpoints, n_steps + 2), dtype=complex)
+        k_evo_array = np.zeros((self.gridpoints, n_steps + 2), dtype=complex)
         evo_array[:,0] = psi_guess
         k_evo_array[:,0] = fft(psi_guess)
         #Loop over time evolution for set amount of steps
@@ -415,8 +478,8 @@ class Gross_Pitaevskii_1D():
             FFT_psi = fft(psi)
             FFT_psi *= kin_evo
             psi = ifft(FFT_psi)
-            prob_dist = np.abs(psi)**2
-            pot_evo = np.exp(-i*(V[:,counter]-sign*g*prob_dist)*self.dt) #chemical potential -mu = -1 removed for Bragg testing and it seems to work. Ask if this is okay.
+            density = np.abs(psi)**2
+            pot_evo = np.exp(-i*(V[:,counter]-g_factor*g*density)*self.dt)
             psi *= pot_evo
             FFT_psi = fft(psi)
             FFT_psi *= kin_evo
@@ -427,9 +490,9 @@ class Gross_Pitaevskii_1D():
             k_evo_array[:,counter] = FFT_psi
         return [evo_array, k_evo_array]
 
-    #------- Visualization ----------------------------------------------------------------
+    #------- Visualization -----------------------------------------------------------------
     def timeslider_plot(self, x_grid, evo_array, V):
-        n_pts, n_times = evo_array.shape
+        _, n_times = evo_array.shape
 
         # ---- Precomputation -------------------------------------------------
         # Global max density (vertical scale stays constant)
@@ -452,7 +515,6 @@ class Gross_Pitaevskii_1D():
 
         # ---- Plot setup --------------------------------------------------------------
         fig, ax = plt.subplots()
-        
         fig.subplots_adjust(bottom=0.25)
         # Initial density line
         line, = ax.plot(x_grid, densities[:, 0], lw=1)
@@ -472,9 +534,8 @@ class Gross_Pitaevskii_1D():
         axtime = fig.add_axes([0.25, 0.1, 0.65, 0.03])
         time_slider = plt.Slider(ax=axtime, label='Time',
                                   valmin=0, valmax=(n_times-1)*self.dt, valinit=0)
-        
         # ---- Update function ----------------------------------------------------
-        def update(val):
+        def update(_):
             t = int(time_slider.val/self.dt)
             # Update density line
             line.set_ydata(densities[:, t])
@@ -490,8 +551,8 @@ class Gross_Pitaevskii_1D():
 
         plt.show()
 
-    def reciprocal_timeslider_plot(self, k_grid, k_evo_array, dk):
-        n_pts, n_times = k_evo_array.shape
+    def reciprocal_timeslider_plot(self, k_grid, k_evo_array, k_kick):
+        _, n_times = k_evo_array.shape
 
         # ---- Precomputation -------------------------------------------------
         # Shift the frequencies to look normal
@@ -522,7 +583,7 @@ class Gross_Pitaevskii_1D():
         line, = ax.plot(k_grid, densities[:, 0], lw=1)
         # Initial phase image
         im = ax.imshow(
-            Z, extent=[-2*dk, 2*dk, y_min, y_max+0.1*y_max],
+            Z, extent=[-2*k_kick, 2*k_kick, y_min, y_max+0.1*y_max],
             origin='lower', cmap='twilight', aspect='auto', vmin=-np.pi, vmax=np.pi
         )
         # Add initial polygon clip
@@ -537,7 +598,7 @@ class Gross_Pitaevskii_1D():
                                   valmin=0, valmax=(n_times-1)*self.dt, valinit=0)
 
         # ---- Update function ----------------------------------------------------
-        def update(val):
+        def update(_):
             t = int(time_slider.val/self.dt)
             # Update density line
             line.set_ydata(densities[:, t])
