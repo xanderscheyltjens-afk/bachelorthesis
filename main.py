@@ -1,0 +1,433 @@
+import Tijdsevolutie_Gross_Pitaevskii as GP
+import numpy as np
+import csv
+import multiprocessing as mp
+
+
+def main():
+    # --- Initialize system parameters ---
+    L = 50
+    gridpoints = 2**9
+    dt = 0.1 * (L/gridpoints)**2
+    Natoms = 10 * gridpoints
+
+    BEC = GP.Gross_Pitaevskii_1D(L, gridpoints, dt, Natoms)
+    BEC.stability_test()
+    x_grid, k_grid = BEC.initialize_grids()
+
+    psi_guess = BEC.guess_wave_function(x_grid)
+
+    options = {
+        "1":("Finite potential well"),
+        "2":("Finite potential well with added Gaussian curve"),
+        "3":("Harmonic potential"),
+        "4":("Gravitational potential"),
+        "5":("No external potential"),
+        "6":("Exit program")
+        }
+    while True:
+        print("\033[2J\033[H", end="")
+        t = float(input("\nPlease choose the time over which you want to simulate:"))
+        print("\033[2J\033[H", end="")
+        print("\n -------Menu of possible external potentials-------")
+        for key, (desc) in options.items():
+            print(f"{key}. {desc}")
+
+        choice = input("\nPlease choose which potential you want to find the ground state of: ")
+
+        if choice == "6":
+            break
+            print("\033[2J\033[H", end="")
+        elif choice == "1":
+            V = BEC.potential_well(t=t, width = 49, height = 5)
+            [evo_array_ground,k_evo_array_ground] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-4), nmax = 10**6)
+        elif choice == "2":
+            V = BEC.potential_well_with_Gauss(x_grid, t)
+            [evo_array_ground,k_evo_array_ground] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-4), nmax = 10**6)
+        elif choice == "3":
+            V = BEC.harmonic_potential(x_grid, t, omega = 0.01)
+            [evo_array_ground,k_evo_array_ground] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-4), nmax = 10**6)
+        elif choice == "4":
+            V = BEC.gravity_potential(x_grid,t)
+            [evo_array_ground,k_evo_array_ground] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-4), nmax = 10**6)
+        elif choice == "5":
+            V = BEC.null_potential(t)
+            [evo_array_ground,k_evo_array_ground] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-4), nmax = 10**6)
+        else:
+            print("Invalid option, please retry")
+            break
+ 
+        ground_state = evo_array_ground[:,-1]
+        print("\033[2J\033[H", end="")
+        plot = input("Do you want to plot this ground state\n")
+        if plot == "y" or plot == "yes":
+            BEC.timeslider_plot(x_grid,evo_array_ground,V)
+        options2 = {
+            "1": "Static simulation of ground state",
+            "2": "Added Gaussian pulse at t=1",
+            "3": "Added wave pulse at t=1",
+            "4": "Idealized beamsplitter", 
+            "5": "Release from potential"
+        }
+
+        if choice == "1":
+            options2.update({
+                "6": "Added Gauss curve to potential well (same as Mathematica example)"
+            })
+
+        print("\033[2J\033[H", end="")
+        print("\n -------BEC Simulation Menu-------")
+        for key, desc in options2.items():
+            print(f"{key}. {desc}")
+
+        choice2 = int(input("\nChoose which simulation you'd like to run: "))
+        if choice2 == 0:
+            break
+        elif choice2 == 1:
+            [evo_array, k_evo_array] = BEC.time_evolution(k_grid,ground_state, V, t)
+        elif choice2 == 2:
+            V+=BEC.Gauss_pulse(x_grid, t, pulse_width_x = 20)
+            [evo_array, k_evo_array] = BEC.time_evolution(k_grid,ground_state, V, t)
+        elif choice2 == 3:
+            V+=BEC.wave_pulse(x_grid,t)
+            [evo_array, k_evo_array] = BEC.time_evolution(k_grid,ground_state, V, t)
+        elif choice2 == 4:
+            ground_state = BEC.split_beams(ground_state, x_grid, 0.1)
+            [evo_array, k_evo_array] = BEC.time_evolution(k_grid,ground_state, V, t)
+        elif choice2 == 5:
+            V = BEC.null_potential(t)
+            [evo_array, k_evo_array] = BEC.time_evolution(k_grid,ground_state, V, t)
+        elif choice2 == 6:
+            V = BEC.potential_well_with_Gauss(x_grid, t)
+            [evo_array, k_evo_array] = BEC.time_evolution(k_grid,ground_state, V, t)
+        else:
+            print("Invalid option, please retry")
+        BEC.timeslider_plot(x_grid,evo_array,V)
+
+def quality_of_splitting():
+    #Initialize system parameters
+    sim_length = 50
+    gridpoints = 2**9
+    dt = 0.1*(sim_length/gridpoints)**2
+    Natoms = 10*gridpoints
+    t = 5
+    #Initialize class
+    BEC = GP.Gross_Pitaevskii_1D(sim_length,gridpoints,dt,Natoms)
+    g = np.arange(-1,1.1,0.1)
+    counter = 0
+    split1 = np.zeros(len(g))
+    split2 = np.zeros(len(g))
+    split3 = np.zeros(len(g))
+    for g_factor in g:
+        t_c = [0.5, 2.3, 4.1]
+        dk = 2*np.pi / sim_length
+        m = 100 
+        k_kick = m*dk
+        wavelen = [2*np.pi / k_kick, 2*np.pi / k_kick, 2*np.pi / k_kick]
+        A = 50
+        omega = k_kick**2 / 2
+        v = [omega/k_kick, omega/k_kick, omega/k_kick]
+        q = [v[0]-0.5*k_kick,v[1]-0.5*k_kick,v[2]-0.5*k_kick]
+        pulse_duration = BEC.Ramsey_sequence_generator(v,q,k_kick,A)
+        [_, k_evo_array] = BEC.interferometer(t, t_c, pulse_duration, wavelen, A, v, k_kick = k_kick, g_factor = g_factor, plot = False)
+
+        #Calculate the fraction of the condensate that split off or is still to determine quality at 3 different points
+        moment1 = 1
+        percent = BEC.split_percent(k_evo_array,moment1,k_kick)
+        split1[counter] = percent
+        print("The split off part is ", percent, "% of the total condensate at t=", moment1)
+        moment2 = 2.8
+        percent2 = BEC.split_percent(k_evo_array,moment2,k_kick)
+        split2[counter] = percent2
+        print("The split off part is ", percent2, "% of the total condensate at t=", moment2)
+        moment3 = 4.6
+        percent3 = BEC.still_percent(k_evo_array,moment3)
+        split3[counter] = percent3
+        print("The still condensate is ", percent3, "% of the total condensate at t=", moment3)
+        counter +=1
+
+    filename = ('pulse_quality.txt')
+    outfile = open(filename, 'w')
+    outfile.writelines("List of percentage split off from condensate after first pulse\n:")
+    outfile.writelines([str(i)+ "\n" for i in split1])
+    outfile.writelines("List of percentage split off from condensate after second pulse\n:")
+    outfile.writelines([str(i)+ "\n" for i in split2])
+    outfile.writelines("List of recovered condensate after all pulses\n:")
+    outfile.writelines([str(i)+ "\n" for i in split3])
+    outfile.close()
+
+def optimal_settings(g_factor, resm=10, resA=10):
+    # Initialize system parameters
+    sim_length = 50
+    gridpoints = 2**9
+    dt = 0.1*(sim_length/gridpoints)**2
+    Natoms = 10*gridpoints
+    t = 3
+    BEC = GP.Gross_Pitaevskii_1D(sim_length, gridpoints, dt, Natoms)
+    # Compute the ground state beforehand for optimisation
+    x_grid, k_grid = BEC.initialize_grids()
+    psi_guess = BEC.guess_wave_function(x_grid)
+    #V = self.gravity_potential(x_grid, t)
+    V = BEC.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
+    [evo_array_ground, _] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, g_factor = g_factor)
+    ground_state = evo_array_ground[:,-1]
+    # Set the constants outside the loop
+    t_c = [0.1, 0.9, 1.7]
+    dk = 2*np.pi / sim_length
+    #Open the CSV file we want to write the results in
+    with open(f'sweep_g_factor{g_factor}_resm{resm}_resV{resA}_last_little_bit.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        # Header row
+        writer.writerow(['m', 'V', 'split1', 'still1', 'split2', 'still2', 'still3'])
+
+        for m in range(244, 255+resm, resm):
+            for A in range(0+resA, 100+resA, resA):
+                k_kick = m*dk
+                wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick, A)
+                V = BEC.potential_well(t, width = 49.9, height = 1000)
+                V += BEC.wave_pulse_series(x_grid,t, t_c, pulse_duration , wavelen, A, v)
+                [_, k_evo_array] = BEC.time_evolution(k_grid, ground_state, V, t, g_factor)
+
+                split1 = BEC.split_percent(k_evo_array, 0.5, k_kick)
+                still1 = BEC.still_percent(k_evo_array, 0.5, k_kick)
+                split2 = BEC.split_percent(k_evo_array, 1.3, k_kick)
+                still2 = BEC.still_percent(k_evo_array, 1.3, k_kick)
+                split3 = BEC.split_percent(k_evo_array, 2.1, k_kick)
+                still3 = BEC.still_percent(k_evo_array, 2.1, k_kick)
+
+                writer.writerow([m, A, split1, still1, split2, still2, still3])
+                print(f'm={m}, A={A} done')  # progress indicator since this will take a while
+                f.flush()
+
+def run_simulation(args):
+    """Standalone worker function. Must be at module level for pickling"""
+    m, A, g_factor, ground_state, k_grid, x_grid, t, t_c, sim_length = args
+    BEC = GP.Gross_Pitaevskii_1D(sim_length, 2**9, 0.1*(sim_length/2**9)**2, 10*2**9)
+    dk = 2*np.pi / sim_length
+    k_kick = m * dk
+    wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick, A)
+    V = BEC.potential_well(t, width=49.9, height=1000)
+    V += BEC.wave_pulse_series(x_grid, t, t_c, pulse_duration, wavelen, A, v)
+    [_, k_evo_array] = BEC.time_evolution(k_grid, ground_state, V, t, g_factor)
+    split1 = BEC.split_percent(k_evo_array, 0.5, k_kick)
+    still1 = BEC.still_percent(k_evo_array, 0.5, k_kick)
+    split2 = BEC.split_percent(k_evo_array, 1.3, k_kick)
+    still2 = BEC.still_percent(k_evo_array, 1.3, k_kick)
+    split3 = BEC.split_percent(k_evo_array, 2.1, k_kick)
+    still3 = BEC.still_percent(k_evo_array, 2.1, k_kick)
+    print(f'm={m}, A={A} done')
+    return (m, A, split1, still1, split2, still2, split3, still3)
+
+def optimal_settings_multi(g_factor, minm=30, maxm=255, resm=10, minA=1, maxA=100, resA=10):
+    sim_length = 50
+    gridpoints = 2**9
+    dt = 0.1*(sim_length/gridpoints)**2
+    Natoms = 10*gridpoints
+    t = 3
+    t_c = [0.1, 0.9, 1.7]
+
+    # Ground state computed once
+    BEC = GP.Gross_Pitaevskii_1D(sim_length, gridpoints, dt, Natoms)
+    x_grid, k_grid = BEC.initialize_grids()
+    psi_guess = BEC.guess_wave_function(x_grid)
+    V = BEC.harmonic_potential(x_grid, t, omega=0.1, x_c=-12.5)
+    [evo_array_ground, _] = BEC.find_ground_state(k_grid, psi_guess, V, TOL=1e-5, nmax=10**6, g_factor=g_factor)
+    ground_state = evo_array_ground[:, -1]
+
+    # Build argument list for all (m, A) pairs
+    pairs = [(m, A, g_factor, ground_state, k_grid, x_grid, t, t_c, sim_length)
+             for m in range(minm, maxm, resm)
+             for A in range(minA, maxA, resA)]
+
+    with mp.Pool(16) as pool:
+        results = pool.map(run_simulation, pairs)
+
+    # Sort and write all in the main process
+    results.sort(key=lambda x: (x[0], x[1]))
+    with open(f'sweep_gfactor{g_factor}_resm{resm}_resA{resA}_startm10.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['m', 'A', 'split1', 'still1', 'split2', 'still2', 'split3', 'still3'])
+        writer.writerows(results)   
+
+def effect_of_gravity(args):
+    m, A, T,  resg, limg = args
+    #Initialize system parameters
+    sim_length = 50
+    gridpoints = 2**9
+    dt = 0.1*(sim_length/gridpoints)**2
+    Natoms = 10*gridpoints
+    t = (0.1+2*T)+0.5
+    g_factor = 1
+    BEC = GP.Gross_Pitaevskii_1D(sim_length,gridpoints,dt,Natoms)
+    # Compute the ground state beforehand for optimisation
+    x_grid, k_grid = BEC.initialize_grids()
+    psi_guess = BEC.guess_wave_function(x_grid)
+    V = BEC.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
+    [evo_array_ground, k_evo_array_ground] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**5, g_factor = g_factor)
+    ground_state = evo_array_ground[:,-1]
+    dk = 2*np.pi / sim_length
+    k_kick = m*dk
+    t_c = [0.1, 0.1+T, 0.1+2*T]
+    wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick, A)
+    moment = (0.1+2*T)+0.4
+    with open(f'sweep_g_resg_{resg}_limg_{limg}_m_{m}_A_{A}_T_{T}.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        # Header row
+        writer.writerow(['g', 'still', 'split'])
+        for g in np.arange(0, limg+resg, resg):
+            V = BEC.potential_well(t, width = 49.9, height = 1000)
+            V += BEC.wave_pulse_series(x_grid,t, t_c, pulse_duration , wavelen, A, v)
+            V += BEC.gravity_potential(x_grid, t, gravity=g)
+            [_, k_evo_array] = BEC.time_evolution(k_grid, ground_state, V, t, g_factor)
+            still = BEC.still_percent(k_evo_array,moment,k_kick)
+            split = BEC.split_percent(k_evo_array,moment,k_kick)
+            writer.writerow([g, still, split])
+            print(f'g={g} done')
+            f.flush()
+
+def effect_of_time(g_factor, minT, maxT, stepT, gravity=4.61*10**(-3)):
+    #Initialize system parameters
+    sim_length = 50
+    gridpoints = 2**9
+    dt = 0.1*(sim_length/gridpoints)**2
+    Natoms = 10*gridpoints
+    t = (0.1+2*maxT)+0.5
+    #Initialize class
+    BEC = GP.Gross_Pitaevskii_1D(sim_length, gridpoints, dt, Natoms)
+    x_grid, k_grid = BEC.initialize_grids()
+    psi_guess = BEC.guess_wave_function(x_grid)
+    V = BEC.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
+    [evo_array_ground, _] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**5, g_factor = g_factor)
+    ground_state = evo_array_ground[:,-1]
+    #Set interferometer parameters
+    dk = 2*np.pi / sim_length
+    m = 129
+    k_kick = m*dk
+    A = 34
+    wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick,A)
+    T = np.arange(minT,maxT+stepT,stepT)
+    with open(f'sweep_T_g{g_factor}_minT{minT}_maxT{maxT}_stepT{stepT}_grav{gravity}.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        # Header row
+        writer.writerow(['T', 'still', 'split'])
+        for T_i in T:
+            #Full Ramsey sequence
+            t_c = [0.1, 0.1+T_i, 0.1+2*T_i]
+            V = BEC.wave_pulse_series(x_grid,t, t_c, pulse_duration , wavelen, A, v)
+            V += BEC.gravity_potential(x_grid, t, gravity=gravity)
+            [_, k_evo_array] = BEC.time_evolution(k_grid, ground_state, V, (0.1+2*T_i)+0.5, g_factor)
+            moment = (0.1+2*T_i)+0.4
+            still = BEC.still_percent(k_evo_array,moment,k_kick)
+            split = BEC.split_percent(k_evo_array,moment,k_kick)
+            writer.writerow([T_i, still, split])
+            print(f'T={T_i} done')
+            f.flush()
+
+def standard_test():
+    #Initialize system parameters
+    sim_length = 50
+    gridpoints = 2**10
+    dt = 0.1*(sim_length/gridpoints)**2
+    print(dt)
+    Natoms = 10*gridpoints
+    t = 3
+    g_factor = 0
+
+    #Initialize class
+    BEC = GP.Gross_Pitaevskii_1D(sim_length, gridpoints, dt, Natoms)
+    #Set interferometer parameters
+    t_c = [0.1, 0.9, 1.7]
+    dk = 2*np.pi / sim_length
+    m = 150
+    #Soft lower limit. Decreasing past m=35-40 gives larger and larger knockback decreasing the quality of the interferometer
+    #Upper working limit is m=255 after that it sends the condesate back??? and then some aliasing happens at much higher values
+    k_kick = m*dk
+    A = 50
+
+    #Seems like increasing this too much does do some Bragg spectroscopy since the quality decreases a lot but needs more testing
+    #Decreasing too much fucks up the pulse timings since they bleed into eachother, but otherwise no worries
+    #Giving an extra offset to omega will shift q from zero. We can see at higher offsets it moves the condensate to higher harmonics (is that term correct?)
+    #If used (to perhaps get to lower k_kick's) be sure to keep in mind the losses to higher harmonics
+
+    #Full Ramsey sequence
+    wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick,A)
+    print(pulse_duration)
+    [_, k_evo_array] = BEC.interferometer_in_gravity(t, t_c, pulse_duration, wavelen, A, v, k_kick = k_kick, g_factor = g_factor, plot = True, gravity = 0) # Accurate g = 4.61*10**(-3) for 87Ru according to course notes
+    moment = 2
+    percent = BEC.still_percent(k_evo_array,moment,k_kick)
+    print("The still part is ", percent, "% of the total condensate at t=", moment)
+
+def squeeze_k_space(min_g_factor = -5, max_g_factor = 0, step = 0.1, plot = False):
+    # Initialize system parameters
+    sim_length = 50
+    gridpoints = 2**9
+    dt = 0.1*(sim_length/gridpoints)**2
+    Natoms = 10*gridpoints
+    t = 3
+    BEC = GP.Gross_Pitaevskii_1D(sim_length, gridpoints, dt, Natoms)
+    x_grid, k_grid = BEC.initialize_grids()
+    psi_guess = BEC.guess_wave_function(x_grid)
+    # Set the constants outside the loop
+    t_c = [0.1, 0.9, 1.7]
+    dk = 2*np.pi / sim_length
+    m = 129
+    A = 34
+    k_kick = m*dk
+    wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick, A)
+    g_factors = np.arange(min_g_factor, max_g_factor+step, step)
+    #Open the CSV file we want to write the results in
+    with open(f'squeeze_min_g_factor{min_g_factor}_max_g_factor{max_g_factor}_stepsize{step}.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        # Header row
+        writer.writerow(['interaction strength','recovery'])
+
+        for g_factor in g_factors:
+            
+            V = BEC.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
+            [evo_array_ground, k_evo_array_ground] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, g_factor = g_factor)
+            ground_state = evo_array_ground[:,-1]
+            V = BEC.potential_well(t, width = 49.9, height = 1000)
+            V += BEC.wave_pulse_series(x_grid,t, t_c, pulse_duration , wavelen, A, v)
+            [evo_array, k_evo_array] = BEC.time_evolution(k_grid, ground_state, V, t, g_factor = 0)
+            if plot:
+                BEC.timeslider_plot(x_grid, evo_array, V)
+                BEC.reciprocal_timeslider_plot(k_grid,k_evo_array, k_kick)
+            recovery = BEC.still_percent(k_evo_array, 2.1, k_kick)
+            writer.writerow([g_factor, recovery])
+            print(f'g_factor={g_factor} done')  # progress indicator since this will take a while
+            f.flush()
+
+def clean_up_oopsie():
+    with open('sweep_sign0_resm1_resV1_2.csv', 'r') as f:
+        rows = list(csv.reader(f))
+
+        # Fix the V column (index 1) — repeating 10,20,...,100 for each m
+        n_A = 100  # adjust if your resV was different
+        correct_A = list(range(1, 101))
+
+        for i, row in enumerate(rows[1:], start=1):  # skip header
+            rows[i][1] = str(correct_A[(i-1) % n_A])
+
+        with open('sweep_sign0_resm1_resV1_2_fixed.csv', 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(rows)
+
+if __name__ == "__main__":
+    #main()
+    #quality_of_splitting()
+    #optimal_settings(0, 1, 1)
+    #optimal_settings_multi(g_factor=0, minm=1, maxm=260, resm=1, minA=1, maxA=300, resA=1)
+    #effect_of_time(0, 0.2, 10, 0.01)
+    # m=50
+    # A=10
+    # resg = 0.0001
+    # limg = 2*4.61*10**(-3)
+    # pairs = [(m,A, t_travel, resg, limg)
+    #          for t_travel in T]
+    # with mp.Pool(10) as pool:
+    #     pool.map(effect_of_gravity, pairs)
+        
+    standard_test()
+    #squeeze_k_space(min_g_factor = -1.1, max_g_factor = 0.8, step = 0.1, plot = True)
+    #Best simulation of all time: m=40+89, A = 34 according to matlab I think. I might need to search further in the parameter space, goddammit
+    #For repelling interactions it seems like m = 40+117 and A=1
