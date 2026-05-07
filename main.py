@@ -1,3 +1,4 @@
+#Contains all testing methods, showcase methods and data acquisition methods
 import Tijdsevolutie_Gross_Pitaevskii as GP
 import numpy as np
 import csv
@@ -102,7 +103,7 @@ def main():
             [evo_array, k_evo_array] = BEC.time_evolution(k_grid,ground_state, V, t)
         else:
             print("Invalid option, please retry")
-        BEC.timeslider_plot(x_grid,evo_array,V)
+        BEC.reciprocal_timeslider_plot(k_grid,k_evo_array,5)
 
 def quality_of_splitting():
     #Initialize system parameters
@@ -257,7 +258,7 @@ def effect_of_gravity(args):
     dt = 0.1*(sim_length/gridpoints)**2
     Natoms = 10*gridpoints
     t = (0.1+2*T)+0.5
-    g_factor = 1
+    g_factor = 0
     BEC = GP.Gross_Pitaevskii_1D(sim_length,gridpoints,dt,Natoms)
     # Compute the ground state beforehand for optimisation
     x_grid, k_grid = BEC.initialize_grids()
@@ -270,7 +271,7 @@ def effect_of_gravity(args):
     t_c = [0.1, 0.1+T, 0.1+2*T]
     wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick, A)
     moment = (0.1+2*T)+0.4
-    with open(f'sweep_g_resg_{resg}_limg_{limg}_m_{m}_A_{A}_T_{T}.csv', 'w', newline='') as f:
+    with open(f'gravitym129A34_T_{T}_lim_{limg}.csv', 'w', newline='') as f:
         writer = csv.writer(f)
         # Header row
         writer.writerow(['g', 'still', 'split'])
@@ -285,7 +286,7 @@ def effect_of_gravity(args):
             print(f'g={g} done')
             f.flush()
 
-def effect_of_time(g_factor, minT, maxT, stepT, gravity=4.61*10**(-3)):
+def effect_of_time(g_factor, minT, maxT, stepT, gravity=0.1):
     #Initialize system parameters
     sim_length = 50
     gridpoints = 2**9
@@ -326,23 +327,23 @@ def effect_of_time(g_factor, minT, maxT, stepT, gravity=4.61*10**(-3)):
 def standard_test():
     #Initialize system parameters
     sim_length = 50
-    gridpoints = 2**10
+    gridpoints = 2**9
     dt = 0.1*(sim_length/gridpoints)**2
     print(dt)
     Natoms = 10*gridpoints
-    t = 3
+    t = 4
     g_factor = 0
 
     #Initialize class
     BEC = GP.Gross_Pitaevskii_1D(sim_length, gridpoints, dt, Natoms)
     #Set interferometer parameters
-    t_c = [0.1, 0.9, 1.7]
+    t_c = [0.1, 1.5, 2.9] #standard timing: [0.1, 0.9, 1.7] thesis plot timing:[0.1, 1.5, 2.9]
     dk = 2*np.pi / sim_length
-    m = 150
+    m = 129
     #Soft lower limit. Decreasing past m=35-40 gives larger and larger knockback decreasing the quality of the interferometer
     #Upper working limit is m=255 after that it sends the condesate back??? and then some aliasing happens at much higher values
     k_kick = m*dk
-    A = 50
+    A = 34
 
     #Seems like increasing this too much does do some Bragg spectroscopy since the quality decreases a lot but needs more testing
     #Decreasing too much fucks up the pulse timings since they bleed into eachother, but otherwise no worries
@@ -352,10 +353,51 @@ def standard_test():
     #Full Ramsey sequence
     wavelen, _, v, _, pulse_duration = BEC.Ramsey_sequence_generator(k_kick,A)
     print(pulse_duration)
-    [_, k_evo_array] = BEC.interferometer_in_gravity(t, t_c, pulse_duration, wavelen, A, v, k_kick = k_kick, g_factor = g_factor, plot = True, gravity = 0) # Accurate g = 4.61*10**(-3) for 87Ru according to course notes
-    moment = 2
+    [_, k_evo_array] = BEC.interferometer_in_gravity(t, t_c, pulse_duration, wavelen, A, v, k_kick = k_kick, g_factor = g_factor, plot = False, thesis_plot=True, gravity = 0) # Accurate g = 4.616*10**(-3) for 87Ru according to xi from course notes
+    moment = 3
     percent = BEC.still_percent(k_evo_array,moment,k_kick)
     print("The still part is ", percent, "% of the total condensate at t=", moment)
+
+def double_loop_interferometer():
+    sim_length = 50
+    gridpoints = 2**9
+    dt = 0.1*(sim_length/gridpoints)**2
+    print(dt)
+    Natoms = 10*gridpoints
+    t = 4
+    g_factor = 0
+    #Set sequence parameters
+    t_c = [0.1, 0.9, 2.5, 3.3]
+    dk = 2*np.pi / sim_length
+    m = 129
+    k_kick = m*dk
+    A = 34
+    #Generate the pi/2-pi-pi-pi/2 sequence
+    wavelen = [2*np.pi/k_kick, 2*np.pi/k_kick, 2*np.pi/k_kick, 2*np.pi/k_kick]
+    omega = k_kick**2 / 2
+    v = [omega/k_kick, omega/k_kick, omega/k_kick, omega/k_kick]
+    q = [v[0]-0.5*k_kick,v[1]-0.5*k_kick,v[2]-0.5*k_kick, v[3]-0.5*k_kick]
+    pulse_duration = [np.pi/2*(1/np.sqrt((q[0]+k_kick)**2/2-v[0]*k_kick-q[0]**2/2+A**2)),
+                        np.pi*(1/np.sqrt((q[1]+k_kick)**2/2-v[1]*k_kick-q[1]**2/2+A**2)),
+                        np.pi*(1/np.sqrt((q[2]+k_kick)**2/2-v[2]*k_kick-q[2]**2/2+A**2)),
+                        3*np.pi/2*(1/np.sqrt((q[3]+k_kick)**2/2-v[3]*k_kick-q[3]**2/2+A**2))]
+    #Initialize class
+    BEC = GP.Gross_Pitaevskii_1D(sim_length, gridpoints, dt, Natoms)
+    #interferometer
+    x_grid, k_grid = BEC.initialize_grids()
+    psi_guess = BEC.harmonic_guess_wave_function(x_grid,x_c = -12.5)
+    V = BEC.harmonic_potential(x_grid, t, omega = 0.1, x_c = -12.5)
+    [evo_array_ground,_] = BEC.find_ground_state(k_grid, psi_guess, V, TOL = 10**(-5), nmax = 10**6, g_factor = g_factor)
+    ground_state = evo_array_ground[:,-1]
+    V = BEC.potential_well(t, width = 49.9, height = 1000)
+    V += BEC.wave_pulse_series(x_grid,t, t_c, pulse_duration , wavelen, A, v)
+    [evo_array, k_evo_array] = BEC.time_evolution(k_grid, ground_state, V, t, g_factor)
+    BEC.timeslider_plot(x_grid, evo_array, V)
+    BEC.reciprocal_timeslider_plot(k_grid,k_evo_array, k_kick)
+    BEC.time_slices_plot(4, x_grid, evo_array, V, [0.1, 0.5, 0.9, 1.3, 1.7, 2.1, 2.5, 2.9, 3.3, 4])
+    BEC.reciprocal_time_slices_plot(4, k_grid, k_evo_array, k_kick, [0.1, 0.5, 0.9, 1.3, 1.7, 2.1, 2.5, 2.9, 3.3, 4])
+    #BEC.animate_evolution(x_grid, evo_array, V, filename="Double_loop_interferometer.mp4", fps=30)
+    BEC.animate_reciprocal_evolution(k_grid, k_evo_array, k_kick, "Double_loop_interferometer3_evil.mp4")
 
 def squeeze_k_space(min_g_factor = -5, max_g_factor = 0, step = 0.1, plot = False):
     # Initialize system parameters
@@ -416,18 +458,12 @@ if __name__ == "__main__":
     #main()
     #quality_of_splitting()
     #optimal_settings(0, 1, 1)
-    #optimal_settings_multi(g_factor=0, minm=1, maxm=260, resm=1, minA=1, maxA=300, resA=1)
-    #effect_of_time(0, 0.2, 10, 0.01)
-    # m=50
-    # A=10
-    # resg = 0.0001
-    # limg = 2*4.61*10**(-3)
-    # pairs = [(m,A, t_travel, resg, limg)
-    #          for t_travel in T]
-    # with mp.Pool(10) as pool:
-    #     pool.map(effect_of_gravity, pairs)
-        
-    standard_test()
+    #optimal_settings_multi(g_factor=0, minm=1, maxm=512, resm=10, minA=1, maxA=500, resA=10)
+    #effect_of_time(0, 0, 5, 0.01)
+    # args = (129, 34, 1.6, 0.001, 1)
+    # effect_of_gravity(args)
+    #standard_test()
     #squeeze_k_space(min_g_factor = -1.1, max_g_factor = 0.8, step = 0.1, plot = True)
-    #Best simulation of all time: m=40+89, A = 34 according to matlab I think. I might need to search further in the parameter space, goddammit
-    #For repelling interactions it seems like m = 40+117 and A=1
+    #Best simulation of all time: m=129, A = 34 for no interactions
+    #Set general simulation parameters
+    double_loop_interferometer()

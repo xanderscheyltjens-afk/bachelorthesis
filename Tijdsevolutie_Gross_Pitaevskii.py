@@ -5,9 +5,10 @@
 import numpy as np
 from scipy.fft import fft, ifft, fftfreq, fftshift
 import matplotlib.pyplot as plt
-import scienceplots
 from matplotlib.patches import Polygon
-import seaborn as sns
+from matplotlib import animation
+import matplotlib as mpl
+mpl.rcParams['animation.ffmpeg_path'] = r"C:\Users\xande\OneDrive\Documents\ffmpeg-8.1-full_build\bin\ffmpeg.exe"
 
 class Gross_Pitaevskii_1D():
     """1D simulation of the Gross-Pitaevskii equation. Includes simulation, plotting and data acquisition methods"""
@@ -405,7 +406,7 @@ class Gross_Pitaevskii_1D():
             self.reciprocal_timeslider_plot(k_grid,k_evo_array, k_kick)
         return [evo_array, k_evo_array]
 
-    def interferometer_in_gravity(self, t, t_c=None, pulse_duration=None, wavelen=None, A=10, v=None, k_kick=50, g_factor=-1, plot=True, gravity=0.1):
+    def interferometer_in_gravity(self, t, t_c=None, pulse_duration=None, wavelen=None, A=10, v=None, k_kick=50, g_factor=-1, plot=True, thesis_plot=False, gravity=0.1):
         """Complete interferometer simulation without any external phase shift"""
         #Set default values if none are given.
         #We set these seperately since lists are mutable and could cause issues if assigned in the top line
@@ -430,7 +431,11 @@ class Gross_Pitaevskii_1D():
         [evo_array, k_evo_array] = self.time_evolution(k_grid, ground_state, V, t, g_factor)
         if plot:
             self.timeslider_plot(x_grid, evo_array, V)
-            self.reciprocal_timeslider_plot(k_grid,k_evo_array, k_kick)
+            self.reciprocal_timeslider_plot(k_grid,k_evo_array, k_kick, Lorentz=True)
+        if thesis_plot:
+            self.time_slices_plot(t, x_grid, evo_array, V, moments=[0, 0.1, 0.8, 1.5, 2.2, 2.9, 3]) #moments for gravity: [0, 0.1, 0.5, 0.9, 1.3, 1.7, 2.4] moments other plots:[0, 0.1, 0.8, 1.5, 2.2, 2.9, 3]
+            self.reciprocal_time_slices_plot(t, k_grid, k_evo_array, k_kick, moments=[0, 0.1, 0.8, 1.5, 2.2, 2.9, 3])
+            self.animate_reciprocal_evolution(k_grid, k_evo_array, k_kick, filename="gravity_reciprocal_final.mp4", fps=30)
         return [evo_array, k_evo_array]
 
     #-------Split step methods--------------------------------------------------------------
@@ -503,6 +508,21 @@ class Gross_Pitaevskii_1D():
         return [evo_array, k_evo_array]
 
     #------- Visualization -----------------------------------------------------------------
+    def Lorentz_curve(self, ax, A=34, m=129):
+        dk = 2*np.pi/self.sim_length 
+        k_kick = m*dk
+        omega = k_kick**2 / 2
+        v = omega/k_kick
+        q_res = k_kick
+        dx = self.sim_length/self.gridpoints
+        q = np.linspace(-2*np.pi/dx, 2*np.pi/dx, 1000)
+        omega_10 = (1/2) * (2*(q-q_res)*k_kick + k_kick**2) - v*k_kick
+
+        lorentz = A**2 / (A**2 + omega_10**2)
+
+        line, = ax.plot(q, lorentz, label="Lorentzian", color='k', linewidth=1)
+        return line
+
     def timeslider_plot(self, x_grid, evo_array, V):
         _, n_times = evo_array.shape
 
@@ -526,12 +546,19 @@ class Gross_Pitaevskii_1D():
         Z = np.tile(phases[:, 0], (len(Y), 1)).astype(np.float32)
 
         # ---- Plot setup --------------------------------------------------------------
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(12, 7))
+        ax2 = ax.twinx()
         #plt.style.use(['science', 'no-latex'])
-        fig.subplots_adjust(bottom=0.25)
-        # Initial density line
+        fig.subplots_adjust(bottom=0.25, right=0.9)
+        # Initial lines
         line, = ax.plot(x_grid, densities[:, 0], lw=1)
-        line2, = ax.plot(x_grid, V[:,0]*10, lw=1)
+        line2, = ax2.plot(x_grid, V[:,0], lw=1, color='orange')
+        V_max = np.max(V[10:-10])
+        #Set labels
+        ax2.set_ylim(0, V_max*10)
+        ax.set_xlabel("Positie")
+        ax.set_ylabel('$|\psi(x,t)|^2$')
+        ax2.set_ylabel('Externe potentiaal')
         # Initial phase image
         im = ax.imshow(
             Z, extent=[x_grid.min(), x_grid.max(), y_min, y_max+0.1*y_max],
@@ -542,17 +569,17 @@ class Gross_Pitaevskii_1D():
         ax.add_patch(poly)
         im.set_clip_path(poly)
         #Add colorbar
-        fig.colorbar(im, ax=ax, label='Phase')
+        fig.colorbar(im, ax=[ax, ax2], label='Fase', )
         #Create slider
         axtime = fig.add_axes([0.25, 0.1, 0.65, 0.03])
-        time_slider = plt.Slider(ax=axtime, label='Time',
+        time_slider = plt.Slider(ax=axtime, label='Tijd',
                                   valmin=0, valmax=(n_times-1)*self.dt, valinit=0)
         # ---- Update function ----------------------------------------------------
         def update(_):
             t = int(time_slider.val/self.dt)
             # Update density line
             line.set_ydata(densities[:, t])
-            line2.set_ydata(V[:,t-1]*10)
+            line2.set_ydata(V[:,t-1])
             # Update polygon clip
             poly.set_xy(all_polys[t].get_xy())
             # Update phase image
@@ -564,7 +591,7 @@ class Gross_Pitaevskii_1D():
 
         plt.show()
 
-    def reciprocal_timeslider_plot(self, k_grid, k_evo_array, k_kick):
+    def reciprocal_timeslider_plot(self, k_grid, k_evo_array, k_kick, Lorentz=False):
         _, n_times = k_evo_array.shape
 
         # ---- Precomputation -------------------------------------------------
@@ -590,10 +617,44 @@ class Gross_Pitaevskii_1D():
         Z = np.tile(phases[:, 0], (len(Y), 1)).astype(np.float32)
 
         # ---- Plot setup --------------------------------------------------------------
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(12, 7))
         fig.subplots_adjust(bottom=0.25)
+
+        # Create Brillouin zone background
+        k_min, k_max = -2*k_kick, 2*k_kick
+        # Colors
+        color_1 = '#fff7bc'  # 1st BZ (pastel yellow)
+        color_2 = '#c6dbef'  # 2nd BZ (pastel blue)
+        color_3 = '#ff6961'  # 3rd BZ (pastel red)
+        # 1st BZ
+        ax.axvspan(-k_kick/2, k_kick/2, color=color_1, alpha=0.3, zorder=0)
+        # 2nd BZ (left and right)
+        ax.axvspan(-3*k_kick/2, -k_kick/2, color=color_2, alpha=0.3, zorder=0)
+        ax.axvspan(k_kick/2, 3*k_kick/2, color=color_2, alpha=0.3, zorder=0)
+        # 3rd BZ (only visible halves within plotting range)
+        ax.axvspan(k_min, -3*k_kick/2, color=color_3, alpha=0.3, zorder=0)
+        ax.axvspan(3*k_kick/2, k_max, color=color_3, alpha=0.3, zorder=0)
+
+        y_top = y_max
+        ax.text(0, y_top, f"$n=0$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        ax.text(k_kick, y_top, f"$n=1$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        ax.text(-k_kick, y_top, f"$n=-1$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        #Mark the edges of the BZ
+        for n in range(-3, 4):
+            boundary = (n + 0.5) * k_kick
+            ax.axvline(boundary, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
+
         # Initial density line
         line, = ax.plot(k_grid, densities[:, 0], lw=1)
+        if Lorentz:
+            ax2 = ax.twinx()
+            line2 = self.Lorentz_curve(ax2)
+            plt.title("Reciproke ruimte met Lorentzcurve rond $k_{kick}$") #was created for a single plot in the report
+            ax2.set_ylim(0,1.2)
+            ax2.set_ylabel("Fractie overgedragen atomen")
+        # Set labels
+        ax.set_xlabel("Impuls")
+        ax.set_ylabel('$|\psi(k,t)|^2$')
         # Initial phase image
         im = ax.imshow(
             Z, extent=[-2*k_kick, 2*k_kick, y_min, y_max+0.1*y_max],
@@ -604,10 +665,13 @@ class Gross_Pitaevskii_1D():
         ax.add_patch(poly)
         im.set_clip_path(poly)
         #Add colorbar
-        fig.colorbar(im, ax=ax, label='Phase')
+        if Lorentz:
+            fig.colorbar(im, ax=[ax,ax2], label='Fase')
+        else:
+            fig.colorbar(im, ax=ax, label='Fase')
         #Create slider
         axtime = fig.add_axes([0.25, 0.1, 0.65, 0.03])
-        time_slider = plt.Slider(ax=axtime, label='Time',
+        time_slider = plt.Slider(ax=axtime, label='Tijd',
                                   valmin=0, valmax=(n_times-1)*self.dt, valinit=0)
 
         # ---- Update function ----------------------------------------------------
@@ -624,5 +688,348 @@ class Gross_Pitaevskii_1D():
             fig.canvas.draw_idle()
 
         time_slider.on_changed(update)
+        plt.show()
+
+    def time_slices_plot(self, t, x_grid, evo_array, V, moments=None, n_slices=6):
+        densities = np.abs(evo_array)**2
+        phases = np.angle(evo_array)
+        phases = (phases + np.pi) % (2 * np.pi) - np.pi
+
+        # ---- Choose time slices ----
+        if moments is None:
+            moments = np.linspace(0, t, n_slices, dtype=float)
+        else:
+            moments = np.array(moments, dtype=float)
+
+        # ---- Normalization & offset ----
+        max_density = np.max(densities)
+        offset = 0.8*max_density  # spacing between curves
+
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+
+        for i, ti in enumerate(moments/self.dt):
+            y_offset = i * offset
+            density = densities[:, int(ti)]
+            potential = V[1:-2,int(ti)]
+            potential_scaled = potential / np.max(V[1:-2]) * 0.1*max_density
+            # Shifted density
+            y_vals = density + y_offset
+            shift_potential = potential_scaled + y_offset
+
+            # Plot line
+            ax.plot(x_grid, y_vals, color='black', lw=1)
+            ax.plot(x_grid[1:-2], shift_potential, lw=1, color='orange')
+
+            # ---- Phase colormap fill (your idea preserved) ----
+            verts = [(x_grid[0], y_offset)] + list(zip(x_grid, y_vals)) + [(x_grid[-1], y_offset)]
+            poly = Polygon(verts, facecolor='none', edgecolor='none')
+            poly.set_zorder(1.5)
+            ax.add_patch(poly)
+
+            # Create phase image
+            Y = np.linspace(y_offset, y_offset + offset, 200)
+            Z = np.tile(phases[:, int(ti)], (len(Y), 1))
+
+            im = ax.imshow(
+                Z,
+                extent=[x_grid.min(), x_grid.max(), y_offset, y_offset + offset],
+                origin='lower',
+                cmap='twilight',
+                aspect='auto',
+                vmin=-np.pi,
+                vmax=np.pi,
+                zorder=1  # <-- important
+            )
+
+            ax.plot(x_grid, y_vals, color='black', lw=1, zorder=2)
+            im.set_clip_path(poly)
+
+            # Optional: label time
+            ax.text(x_grid.max(), y_offset, f"t = {ti*self.dt:.2f}",
+                    va='bottom', ha='right', fontsize=8)
+
+        ax.set_xlabel("Positie")
+
+        # Clean up look (important for thesis visuals)
+        ax.set_yticks([])
+        ax.spines[['left', 'right', 'top']].set_visible(False)
+
+        plt.colorbar(im, ax=ax, label='Fase')
 
         plt.show()
+
+    def reciprocal_time_slices_plot(self, t, k_grid, k_evo_array, k_kick, moments=None, n_slices=6):
+        # Shift the frequencies to look normal
+        k_evo_array = fftshift(k_evo_array, axes=0)
+        k_grid = fftshift(k_grid)
+        #Same computations as always
+        densities = np.abs(k_evo_array)**2
+        phases = np.angle(k_evo_array)
+        phases = (phases + np.pi) % (2 * np.pi) - np.pi
+        #For the spacing of the plots later. Doing it now so check is easier
+        max_density = np.max(densities)
+        offset = 0.8*max_density  # spacing between curves
+        if moments is None:
+            y_top = n_slices * offset+1.1*densities[-1]
+        else:
+            y_top = (len(moments)-1) * offset+1.1*np.max(densities[:, int(moments[-1]/self.dt)])
+        # ---- Choose time slices ----
+        if moments is None:
+            moments = np.linspace(0, t, n_slices, dtype=float)
+        else:
+            moments = np.array(moments, dtype=float)
+
+        # ---- Normalization & offset ----
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+
+        # Create Brillouin zone background
+        k_min, k_max = -2*k_kick, 2*k_kick
+        # Colors
+        color_1 = '#fff7bc'  # 1st BZ (pastel yellow)
+        color_2 = '#c6dbef'  # 2nd BZ (pastel blue)
+        color_3 = '#ff6961'  # 3rd BZ (pastel red)
+        # 1st BZ
+        ax.axvspan(-k_kick/2, k_kick/2, color=color_1, alpha=0.3, zorder=0)
+        # 2nd BZ 
+        ax.axvspan(-3*k_kick/2, -k_kick/2, color=color_2, alpha=0.3, zorder=0)
+        ax.axvspan(k_kick/2, 3*k_kick/2, color=color_2, alpha=0.3, zorder=0)
+        # 3rd BZ 
+        ax.axvspan(k_min, -3*k_kick/2, color=color_3, alpha=0.3, zorder=0)
+        ax.axvspan(3*k_kick/2, k_max, color=color_3, alpha=0.3, zorder=0)
+        #Add labels
+        ax.text(0, y_top, f"$n=0$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        ax.text(k_kick, y_top, f"$n=1$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        ax.text(-k_kick, y_top, f"$n=-1$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        #Mark the edges of the BZ
+        for n in range(-3, 4):
+            boundary = (n + 0.5) * k_kick
+            ax.axvline(boundary, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
+
+        # Plot all of the different moments in a joyplot like fashion
+        for i, t in enumerate(moments/self.dt):
+            y_offset = i * offset
+            density = densities[:, int(t)]
+
+            # Shifted density
+            y_vals = density + y_offset
+
+            # Plot line
+            ax.plot(k_grid, y_vals, color='black', lw=1)
+
+            # ---- Phase colormap fill ----
+            verts = [(k_grid[0], y_offset)] + list(zip(k_grid, y_vals)) + [(k_grid[-1], y_offset)]
+            poly = Polygon(verts, facecolor='none', edgecolor='none')
+            poly.set_zorder(1.5)
+            ax.add_patch(poly)
+
+            # Create phase image
+            Y = np.linspace(y_offset, y_offset + offset, 200)
+            Z = np.tile(phases[:, int(t)], (len(Y), 1))
+
+            im = ax.imshow(
+                Z,
+                extent=[-2*k_kick, 2*k_kick, y_offset, y_offset + offset],
+                origin='lower',
+                cmap='twilight',
+                aspect='auto',
+                vmin=-np.pi,
+                vmax=np.pi,
+                zorder=1  # <-- important
+            )
+
+            ax.plot(k_grid, y_vals, color='black', lw=1, zorder=2)
+            im.set_clip_path(poly)
+            ax.set_xlim(-2*k_kick, 2*k_kick)
+            # Label time
+            ax.text(k_grid.max(), y_offset, f"t = {t*self.dt:.2f}",
+                    va='bottom', ha='right', fontsize=8)
+
+        ax.set_xlabel("Impuls")
+
+        # Clean up look
+        ax.set_yticks([])
+        ax.spines[['left', 'right', 'top']].set_visible(False)
+
+        plt.colorbar(im, ax=ax, label='Fase')
+
+        plt.show()
+
+    def animate_evolution(self, x_grid, evo_array, V, filename="animation.mp4", fps=30):
+        _, n_times = evo_array.shape
+
+        # ---- Precomputation -------------------------------------------------
+        densities = np.abs(evo_array)**2
+        phases = np.angle(evo_array)
+        phases = (phases + np.pi) % (2 * np.pi) - np.pi
+
+        global_ymax = np.max(densities)
+        y_min, y_max = 0, global_ymax
+
+        # Precompute polygons
+        all_polys = []
+        for t in range(n_times):
+            verts = [(x_grid[0], y_min)] + list(zip(x_grid, densities[:, t])) + [(x_grid[-1], y_min)]
+            all_polys.append(verts)
+
+        # Phase image grid
+        Y = np.linspace(y_min, y_max, 400)
+        Z = np.tile(phases[:, 0], (len(Y), 1)).astype(np.float32)
+
+        # ---- Plot setup -----------------------------------------------------
+        fig, ax = plt.subplots(figsize=(12, 7))
+        ax2 = ax.twinx()
+
+        line, = ax.plot(x_grid, densities[:, 0], lw=1)
+        line2, = ax2.plot(x_grid, V[:, 0], lw=1, color='orange')
+
+        V_max = np.max(V[10:-10])
+        ax2.set_ylim(0, V_max * 10)
+
+        ax.set_xlabel("Positie")
+        ax.set_ylabel(r'$|\psi(x,t)|^2$')
+        ax2.set_ylabel('Externe potentiaal')
+
+        im = ax.imshow(
+            Z,
+            extent=[x_grid.min(), x_grid.max(), y_min, y_max + 0.1*y_max],
+            origin='lower',
+            cmap='twilight',
+            aspect='auto',
+            vmin=-np.pi,
+            vmax=np.pi
+        )
+
+        poly = Polygon(all_polys[0], facecolor='none', edgecolor='none')
+        ax.add_patch(poly)
+        im.set_clip_path(poly)
+
+        fig.colorbar(im, ax=[ax, ax2], label='Fase')
+
+        # ---- Animation update ----------------------------------------------
+        def update(frame):
+            t = frame
+
+            line.set_ydata(densities[:, t])
+            line2.set_ydata(V[:, t-1] if t > 0 else V[:, 0])
+
+            # Update polygon
+            poly.set_xy(all_polys[t])
+
+            # Update phase image
+            Z[:] = phases[:, t]
+            im.set_data(Z)
+
+            return line, line2, im, poly
+
+        step = 20
+        anim = animation.FuncAnimation(
+            fig,
+            update,
+            frames=range(0,n_times,step),
+            interval=1000/fps,
+            blit=True
+        )
+        print(n_times)
+        # ---- Save -----------------------------------------------------------
+        writer = animation.FFMpegWriter(fps=fps, bitrate=5000)
+        anim.save(filename, writer=writer, dpi=300)
+
+        print(f"Saved animation to {filename}")
+
+    def animate_reciprocal_evolution(self, k_grid, k_evo_array, k_kick, filename="animation.mp4", fps=30):
+        _, n_times = k_evo_array.shape
+
+        # ---- Precomputation -------------------------------------------------
+        # Shift the frequencies to look normal
+        k_evo_array = fftshift(k_evo_array, axes=0)
+        k_grid = fftshift(k_grid)
+        # Global max density (vertical scale stays constant)
+        global_ymax = np.max(np.abs(k_evo_array)**2)
+        y_min, y_max = 0, global_ymax
+        # Precompute density and wrapped phases for all timesteps
+        densities = np.abs(k_evo_array)**2
+        phases = np.angle(k_evo_array)
+        phases = (phases + np.pi) % (2 * np.pi) - np.pi
+        # Precompute polygons for all timesteps
+        all_polys = []
+        for t in range(n_times):
+            verts = [(k_grid[0], y_min)] + list(zip(k_grid, densities[:, t])) + [(k_grid[-1], y_min)]
+            all_polys.append(verts)
+        # Precompute vertical grid for phase image
+        Y = np.linspace(y_min, y_max, 400)
+        # Initial phase-gradient image (first timestep)
+        Z = np.tile(phases[:, 0], (len(Y), 1)).astype(np.float32)
+
+        # ---- Plot setup --------------------------------------------------------------
+        fig, ax = plt.subplots(figsize=(12, 7))
+        fig.subplots_adjust(bottom=0.25)
+
+        # Create Brillouin zone background
+        k_min, k_max = -2*k_kick, 2*k_kick
+        # Colors
+        color_1 = '#fff7bc'  # 1st BZ (pastel yellow)
+        color_2 = '#c6dbef'  # 2nd BZ (pastel blue)
+        color_3 = '#ff6961'  # 3rd BZ (pastel red)
+        # 1st BZ
+        ax.axvspan(-k_kick/2, k_kick/2, color=color_1, alpha=0.3, zorder=0)
+        # 2nd BZ (left and right)
+        ax.axvspan(-3*k_kick/2, -k_kick/2, color=color_2, alpha=0.3, zorder=0)
+        ax.axvspan(k_kick/2, 3*k_kick/2, color=color_2, alpha=0.3, zorder=0)
+        # 3rd BZ (only visible halves within plotting range)
+        ax.axvspan(k_min, -3*k_kick/2, color=color_3, alpha=0.3, zorder=0)
+        ax.axvspan(3*k_kick/2, k_max, color=color_3, alpha=0.3, zorder=0)
+
+        y_top = y_max
+        ax.text(0, y_top, f"$n=0$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        ax.text(k_kick, y_top, f"$n=1$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        ax.text(-k_kick, y_top, f"$n=-1$", ha='center', va='bottom', fontsize=10, alpha=0.7)
+        #Mark the edges of the BZ
+        for n in range(-3, 4):
+            boundary = (n + 0.5) * k_kick
+            ax.axvline(boundary, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
+
+        # Initial density line
+        line, = ax.plot(k_grid, densities[:, 0], lw=1)
+        # Set labels
+        ax.set_xlabel("Impuls")
+        ax.set_ylabel('$|\psi(k,t)|^2$')
+        # Initial phase image
+        im = ax.imshow(
+            Z, extent=[-2*k_kick, 2*k_kick, y_min, y_max+0.1*y_max],
+            origin='lower', cmap='twilight', aspect='auto', vmin=-np.pi, vmax=np.pi
+        )
+        # Add initial polygon clip
+        poly = Polygon(all_polys[0], facecolor='none', edgecolor='none')
+        ax.add_patch(poly)
+        im.set_clip_path(poly)
+
+        fig.colorbar(im, ax=ax, label='Fase')
+        # ---- Animation update ----------------------------------------------
+        def update(frame):
+            t = frame
+
+            line.set_ydata(densities[:, t])
+
+            # Update polygon
+            poly.set_xy(all_polys[t])
+
+            # Update phase image
+            Z[:] = phases[:, t]
+            im.set_data(Z)
+
+            return line, im, poly
+
+        step = 20
+        anim = animation.FuncAnimation(
+            fig,
+            update,
+            frames=range(0,n_times,step),
+            interval=1000/fps,
+            blit=True
+        )
+        print(n_times)
+        # ---- Save -----------------------------------------------------------
+        writer = animation.FFMpegWriter(fps=fps, bitrate=5000)
+        anim.save(filename, writer=writer, dpi=300)
+
+        print(f"Saved animation to {filename}")
