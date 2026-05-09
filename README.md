@@ -22,4 +22,6 @@ Dynamic potentials: These allow changes through time. Most of these are currentl
 Visualisation:
 1. timeslider_plot(): Visualises the real space with a slider that allows the user to move back and forth through time. The curve shows the modulo squared of the condensate wavefunction |\psi (x)|^2. the colours of the polygon under the curve show the phase of the condensate at that point in space. the other curve visualises the external potential, but this isn't to scale as the units of energy and probability are not the same.
 2. reciprocal_timeslider_plot(): Similar to the previous method but shows the reciprocal space. this plot is useful for checking the splitting quality of a Rabi-pulse.
-The other methods are general use and will probably be added to this read me later lol. I don't really feel like it right now. Anyways, Idk who tf is reading this, it's a random bachelorthesis. Idk what to put in a README, so hopefully this is something lmao.
+
+
+I'm planning to update this README with python version and dependencies but I currently don't have the time/ If this line is still here by the time the next student needs this code be sure to contact me via: xander.scheyltjens@student.uantwerpen.be or any other means.
